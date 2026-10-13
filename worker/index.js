@@ -54,7 +54,7 @@ export default {
   async fetch(request, env) {
     const response = await env.ASSETS.fetch(request)
 
-    // Ressource servie, redirection, erreur autre que » introuvable ¹ :
+    // Ressource servie, redirection, erreur autre que « introuvable » :
     // la réponse de la couche assets fait foi.
     if (response.status !== 404) return response
 
