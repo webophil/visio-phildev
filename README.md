@@ -6,6 +6,10 @@ création de compte pour les participants invités.
 
 Cible de déploiement : `https://visio.phildev.online` — exemple de rendez-vous : `/rdv-aurore`.
 
+Prévisualisation en ligne (FreeBuff Sites) :
+`https://site-7d9cd941571b45a0933cc272119d3f4b.freebuff.page` — même parcours en HTTPS. Cette
+adresse appartient au projet de déploiement : elle change si le site est recréé.
+
 > **Phase 1 : réunions locales.** Aucune infrastructure temps réel n'est connectée. Les
 > identifiants de réunion sont créés localement et ne désignent pas encore de salle distante.
 > Aucun participant distant n'est simulé et aucune connectivité n'est annoncée à tort.
@@ -21,6 +25,7 @@ Cible de déploiement : `https://visio.phildev.online` — exemple de rendez-vou
 | Médias | API navigateur natives : `getUserMedia`, `getDisplayMedia`, `enumerateDevices`, `devicechange` |
 | Routage | Routeur minimal interne (`src/lib/router.ts`, History API) — deux routes |
 | Lint | Oxlint (`npm run lint`) |
+| Déploiement | FreeBuff Sites : Worker Cloudflare + assets statiques (voir « Déploiement ») |
 
 Aucune dépendance supplémentaire : ni Supabase, ni Firebase, ni Convex, ni base de données.
 
@@ -43,6 +48,55 @@ __VITE_ADDITIONAL_SERVER_ALLOWED_HOSTS=exemple.style.dev npm run dev
 ```
 
 Cette variable n'a aucun effet sur `vite build` : la configuration de production n'en dépend pas.
+
+## Déploiement — FreeBuff Sites
+
+L'artefact publié est **`dist/`**, produit par `npm run build`, servi par un Worker Cloudflare
+minimal. Deux fichiers versionnés suffisent à reproduire un déploiement :
+
+| Fichier | Rôle |
+| --- | --- |
+| `preview.manifest.json` | Manifeste de déploiement : `entrypoint`, `modules`, `assetsDirectory` |
+| `worker/index.js` | Worker : sert `dist/` et n'applique le repli SPA qu'aux navigations |
+
+`dist/` n'est pas versionné : il est reconstruit par `npm run build` avant tout déploiement.
+
+### Déploiement explicite uniquement
+
+Un déploiement est **toujours un appel explicite** à l'outil Sites, avec un environnement
+(`preview` ou `production`) et une clé d'idempotence. Ce dépôt ne contient **aucune**
+configuration d'intégration continue (ni `.github/`, ni `wrangler.toml`) et le site n'est relié à
+aucun dépôt : **un commit ou un push GitHub ne déclenche aucun déploiement**, ni en
+prévisualisation ni en production. La production n'est jamais publiée sans autorisation
+explicite.
+
+### Pourquoi `spa: true` doit rester absent du manifeste
+
+Le drapeau `spa: true` délègue la gestion des chemins inconnus à la couche **assets** de la
+plateforme, qui répond alors `index.html` avec un statut **200** pour *toute* requête sans
+correspondance — y compris un JavaScript, un CSS, une image ou une source map absents. Une
+erreur de livraison se retrouve ainsi masquée par une page d'accueil « 200 », et le Worker n'est
+même pas consulté. Le manifeste reste donc volontairement sans `spa` : la décision revient au
+Worker, où elle est explicite et testable.
+
+### Repli SPA du Worker
+
+`worker/index.js` ne sert `index.html` que si la requête est une **navigation de
+l'application**, ce qui exige les trois conditions suivantes :
+
+1. méthode `GET` ou `HEAD` ;
+2. dernier segment du chemin **sans extension** (donc pas `/assets/index-abc123.js`) ;
+3. `Sec-Fetch-Mode: navigate` (signal envoyé par les navigateurs modernes) ou, à défaut,
+   `Accept` contenant `text/html`.
+
+Tout le reste conserve son statut d'origine : une ressource absente reste **404**. Une
+navigation vers `/rdv-aurore` reçoit `index.html` en 200, puis le routeur client
+(`src/lib/router.ts`) prend la suite. Le Worker ne contient aucune logique métier, aucun secret
+et aucune requête sortante.
+
+> Nuance mesurée en ligne : la plateforme injecte son beacon d'analyse (Cloudflare Web
+> Analytics) dans les documents servis à une navigation. Le document reçu peut donc compter
+> quelques centaines d'octets de plus que `dist/index.html` ; le reste du contenu est identique.
 
 ## Scripts
 
@@ -120,7 +174,7 @@ panneaux participants et chat, copie du lien, sortie propre.
 
 **Volontairement différé (Phase 2) :** participants distants et signalisation, chat réellement
 transmis, flou et fonds virtuels (segmentation vidéo), authentification, enregistrement,
-déploiement Cloudflare Workers.
+publication en production (seule la prévisualisation statique est en ligne).
 
 ## Limitations connues
 
