@@ -1,9 +1,16 @@
 /**
- * Worker minimal de publication (Phase 1 — statique uniquement).
+ * Worker PhilDEV Visio — Phase 2.
  *
- * Rôle : servir l'artefact `dist/` via le binding `ASSETS` et garantir le repli
- * SPA des routes de l'application (`/rdv-aurore`, un lien d'invitation partagé,
- * un rafraîchissement de page…).
+ * Deux responsabilités, dans cet ordre :
+ *
+ * 1. **API applicative** (`/api/...`) : création de réunion, délivrance des
+ *    jetons de participation RealtimeKit, session organisateur. C'est le seul
+ *    endroit où le jeton d'API Cloudflare est utilisé ; il n'est jamais renvoyé,
+ *    jamais journalisé, jamais exposé au navigateur. Toutes les réponses
+ *    sensibles sont `Cache-Control: no-store`.
+ *
+ * 2. **Service de l'application** : l'artefact `dist/` via le binding `ASSETS`,
+ *    avec le repli SPA d'origine — strictement réservé aux navigations.
  *
  * Le repli est volontairement restreint aux **navigations** : une ressource
  * absente (JavaScript, CSS, image, police, source map) doit conserver son
@@ -21,9 +28,24 @@
  * à l'étoile), `<link rel=stylesheet>` annonce `text/css`, une `<img>` annonce
  * `image/...` — aucun ne demande `text/html`, et `Sec-Fetch-Mode` y vaut
  * `script`, `cors`, `style`, `image`… jamais `navigate`.
- *
- * Aucune logique métier, aucun secret, aucune requête sortante.
  */
+
+import { HOST_SESSION_TTL_MS, createHostSession, hasHostSecret, verifyHostKey, verifyHostSession } from './hostAuth.js'
+import { clientKey, createRateLimiter } from './rateLimit.js'
+import {
+  HOST_CUSTOM_ID,
+  RealtimeKitError,
+  addParticipant,
+  countDistinctParticipants,
+  createMeeting,
+  effectiveConfig,
+  hasApiToken,
+  hasParticipant,
+  isUuid,
+  listParticipants,
+  listPresets,
+  presets,
+} from './realtimekit.js'
 
 /** Méthodes pour lesquelles un repli vers `index.html` a un sens. */
 const FALLBACK_METHODS = new Set(['GET', 'HEAD'])
@@ -50,8 +72,361 @@ function isAppNavigation(request) {
   return (request.headers.get('Accept') ?? '').includes('text/html')
 }
 
+// ---------------------------------------------------------------------------
+// API
+// ---------------------------------------------------------------------------
+
+/**
+ * Nombre maximum de participants simultanés dans une réunion.
+ * L'organisateur occupe un emplacement : la limite porte sur les personnes,
+ * pas sur les invités.
+ */
+const MAX_PARTICIPANTS = 5
+
+const MIN_DISPLAY_NAME = 2
+const MAX_DISPLAY_NAME = 60
+const MAX_TITLE_LENGTH = 80
+const MAX_BODY_BYTES = 4096
+
+/** Limites par adresse cliente : freinent l'abus sans stockage partagé. */
+const hostLoginLimiter = createRateLimiter({ limit: 6, windowMs: 5 * 60_000 })
+const meetingCreationLimiter = createRateLimiter({ limit: 10, windowMs: 5 * 60_000 })
+const tokenLimiter = createRateLimiter({ limit: 15, windowMs: 5 * 60_000 })
+
+function json(body, status = 200, headers = {}) {
+  return new Response(JSON.stringify(body), {
+    status,
+    headers: {
+      'Content-Type': 'application/json; charset=utf-8',
+      'Cache-Control': 'no-store',
+      'X-Content-Type-Options': 'nosniff',
+      ...headers,
+    },
+  })
+}
+
+/** Refus normalisé : un code stable pour le client, un message en français. */
+function failure(status, error, message, headers = {}) {
+  return json({ error, message }, status, headers)
+}
+
+/**
+ * Traduit une erreur RealtimeKit en réponse HTTP **sans divulgation** : le
+ * statut amont et le message brut ne sont jamais transmis au navigateur.
+ */
+function realtimeKitFailure(error) {
+  if (!(error instanceof RealtimeKitError)) {
+    return failure(502, 'realtimekit-error', "Le service de visioconférence a renvoyé une réponse inattendue.")
+  }
+
+  if (error.status === 404) {
+    return failure(404, 'meeting-not-found', "Cette réunion n'existe plus côté Cloudflare RealtimeKit.")
+  }
+  if (error.status === 401 || error.status === 403) {
+    return failure(
+      503,
+      'realtimekit-forbidden',
+      "Le jeton d'API Cloudflare n'autorise pas la gestion RealtimeKit pour cette application. Vérifiez la portée du jeton (Realtime Admin) et l'identifiant de compte.",
+    )
+  }
+  if (error.status === 429) {
+    return failure(429, 'realtimekit-rate-limited', 'Trop de demandes envoyées à Cloudflare en peu de temps. Réessayez dans une minute.')
+  }
+  if (error.status >= 500 || error.status === 0) {
+    return failure(503, 'realtimekit-unavailable', 'Le service de visioconférence est momentanément injoignable. Réessayez dans quelques instants.')
+  }
+
+  return failure(502, 'realtimekit-rejected', "Cloudflare RealtimeKit a refusé la demande (réunion, preset ou participant invalide).")
+}
+
+async function readJsonBody(request) {
+  const declared = Number(request.headers.get('Content-Length') ?? '0')
+  if (Number.isFinite(declared) && declared > MAX_BODY_BYTES) return null
+
+  let text
+  try {
+    text = await request.text()
+  } catch {
+    return null
+  }
+
+  if (text.length > MAX_BODY_BYTES) return null
+
+  try {
+    const parsed = JSON.parse(text)
+    return parsed && typeof parsed === 'object' ? parsed : null
+  } catch {
+    return null
+  }
+}
+
+/** Le porteur de la requête est-il un organisateur authentifié ? */
+async function isHostRequest(request, env) {
+  return verifyHostSession(env, request.headers.get('X-PhilDEV-Host') ?? '')
+}
+
+function normalizeDisplayName(value) {
+  if (typeof value !== 'string') return null
+  const name = value.trim().replace(/\s+/g, ' ')
+  if (name.length < MIN_DISPLAY_NAME || name.length > MAX_DISPLAY_NAME) return null
+  return name
+}
+
+function normalizeTitle(value, fallback) {
+  if (typeof value !== 'string') return fallback
+  const title = value.trim().replace(/\s+/g, ' ').slice(0, MAX_TITLE_LENGTH)
+  return title.length > 0 ? title : fallback
+}
+
+/** Limite de débit : renvoie une réponse de refus, ou `null` si la demande passe. */
+function enforceRateLimit(request, limiter, scope) {
+  const verdict = limiter.check(clientKey(request, scope))
+  if (verdict.allowed) return null
+
+  return failure(429, 'rate-limited', 'Trop de demandes depuis cette adresse. Patientez une minute avant de réessayer.', {
+    'Retry-After': String(verdict.retryAfter),
+  })
+}
+
+/** `POST /api/host/session` — échange la clé organisateur contre une session signée. */
+async function handleHostSession(request, env) {
+  const limited = enforceRateLimit(request, hostLoginLimiter, 'host-session')
+  if (limited) return limited
+
+  if (!hasHostSecret(env)) {
+    return failure(
+      503,
+      'host-key-missing',
+      "Le secret PHILDEV_HOST_KEY n'est pas encore enregistré dans FreeBuff Sites (onglet Secrets). L'accès organisateur est donc désactivé.",
+    )
+  }
+
+  const body = await readJsonBody(request)
+  if (!body) return failure(400, 'body-invalid', 'Requête illisible.')
+
+  if (!verifyHostKey(env, body.key)) {
+    return failure(401, 'host-key-invalid', 'Clé organisateur incorrecte.')
+  }
+
+  const session = await createHostSession(env)
+
+  return json({ token: session.token, expiresAt: session.expiresAt, ttlMs: HOST_SESSION_TTL_MS })
+}
+
+/** `POST /api/meetings` — crée une réunion Cloudflare et réserve l'emplacement hôte. */
+async function handleCreateMeeting(request, env) {
+  if (!(await isHostRequest(request, env))) {
+    return failure(401, 'host-unauthorized', "Seul l'organisateur authentifié peut créer une réunion.")
+  }
+
+  const limited = enforceRateLimit(request, meetingCreationLimiter, 'meeting-create')
+  if (limited) return limited
+
+  const body = await readJsonBody(request)
+  if (!body) return failure(400, 'body-invalid', 'Requête illisible.')
+
+  const title = normalizeTitle(body.title, 'Réunion PhilDEV')
+  const hostName = normalizeDisplayName(body.displayName) ?? 'Organisateur'
+  const { host: hostPreset } = presets(env)
+
+  try {
+    const meeting = await createMeeting(env, { title })
+
+    // L'emplacement de l'organisateur est réservé dès la création : la limite de
+    // cinq personnes est ainsi atteignable sans jamais bloquer l'hôte, et
+    // l'existence du preset « hôte » est vérifiée immédiatement.
+    await addParticipant(env, meeting.id, {
+      name: hostName,
+      presetName: hostPreset,
+      customParticipantId: HOST_CUSTOM_ID,
+    })
+
+    return json({
+      meetingId: meeting.id,
+      title: meeting.title,
+      hostPreset,
+      maxParticipants: MAX_PARTICIPANTS,
+    })
+  } catch (error) {
+    return realtimeKitFailure(error)
+  }
+}
+
+/** `POST /api/rtk/token` — délivre un jeton de participation (hôte ou invité). */
+async function handleParticipantToken(request, env) {
+  const body = await readJsonBody(request)
+  if (!body) return failure(400, 'body-invalid', 'Requête illisible.')
+
+  const meetingId = typeof body.meetingId === 'string' ? body.meetingId.trim() : ''
+  if (!isUuid(meetingId)) {
+    return failure(400, 'meeting-invalid', "L'identifiant de réunion Cloudflare est absent ou invalide.")
+  }
+
+  const displayName = normalizeDisplayName(body.displayName)
+  if (!displayName) {
+    return failure(400, 'name-invalid', `Indiquez un nom affiché de ${MIN_DISPLAY_NAME} à ${MAX_DISPLAY_NAME} caractères.`)
+  }
+
+  const role = body.role === 'host' ? 'host' : 'guest'
+  const { host: hostPreset, guest: guestPreset } = presets(env)
+
+  if (role === 'host') {
+    if (!(await isHostRequest(request, env))) {
+      return failure(401, 'host-unauthorized', "Session organisateur absente ou expirée : rejoignez en tant qu'invité ou reconnectez-vous.")
+    }
+
+    const limited = enforceRateLimit(request, tokenLimiter, 'token-host')
+    if (limited) return limited
+
+    try {
+      const participant = await addParticipant(env, meetingId, {
+        name: displayName,
+        presetName: hostPreset,
+        customParticipantId: HOST_CUSTOM_ID,
+      })
+
+      return json({
+        token: participant.token,
+        meetingId,
+        displayName: participant.name,
+        presetName: participant.presetName,
+        role,
+        maxParticipants: MAX_PARTICIPANTS,
+      })
+    } catch (error) {
+      return realtimeKitFailure(error)
+    }
+  }
+
+  // Invité : lien d'invitation valide, aucune session requise, aucun compte.
+  const guestId = typeof body.guestId === 'string' ? body.guestId.trim() : ''
+  if (!isUuid(guestId)) {
+    return failure(400, 'guest-invalid', "L'identifiant d'invité est absent ou invalide.")
+  }
+
+  const limited = enforceRateLimit(request, tokenLimiter, 'token-guest')
+  if (limited) return limited
+
+  try {
+    // Contrôle de capacité côté serveur : l'emplacement est compté sur les
+    // identifiants participants distincts, donc une reconnexion ne consomme pas
+    // de place supplémentaire.
+    const rows = await listParticipants(env, meetingId)
+    const alreadyAdmitted = hasParticipant(rows, guestId)
+
+    if (!alreadyAdmitted && countDistinctParticipants(rows) >= MAX_PARTICIPANTS) {
+      return failure(
+        409,
+        'meeting-full',
+        `Cette réunion a atteint sa capacité maximale de ${MAX_PARTICIPANTS} participants. Demandez à l'organisateur de libérer un accès.`,
+      )
+    }
+
+    const participant = await addParticipant(env, meetingId, {
+      name: displayName,
+      presetName: guestPreset,
+      customParticipantId: guestId,
+    })
+
+    return json({
+      token: participant.token,
+      meetingId,
+      displayName: participant.name,
+      presetName: participant.presetName,
+      role,
+      maxParticipants: MAX_PARTICIPANTS,
+    })
+  } catch (error) {
+    return realtimeKitFailure(error)
+  }
+}
+
+/**
+ * `GET /api/rtk/diagnostic` — état **en lecture seule** de la configuration.
+ * Réservé à l'organisateur : ne renvoie que des statuts et des noms de presets,
+ * jamais le jeton, jamais un en-tête, jamais un corps amont.
+ */
+async function handleDiagnostic(request, env) {
+  if (!(await isHostRequest(request, env))) {
+    return failure(401, 'host-unauthorized', "Diagnostic réservé à l'organisateur authentifié.")
+  }
+
+  const config = effectiveConfig(env)
+  const report = {
+    apiTokenPresent: config.tokenPresent,
+    hostKeyPresent: hasHostSecret(env),
+    accountId: config.accountId,
+    appId: config.appId,
+    presetsExpected: { host: config.hostPreset, guest: config.guestPreset },
+    maxParticipants: MAX_PARTICIPANTS,
+    presetsRead: null,
+    presetsAvailable: null,
+  }
+
+  try {
+    const names = await listPresets(env)
+    report.presetsRead = 'ok'
+    report.presetsAvailable = names
+  } catch (error) {
+    report.presetsRead = error instanceof RealtimeKitError ? `${error.status}` : 'erreur'
+    report.presetsError = error instanceof RealtimeKitError ? error.code : null
+  }
+
+  return json(report)
+}
+
+/** Table de routage de l'API. Renvoie `null` si le chemin n'est pas géré ici. */
+async function routeApi(request, url, env) {
+  const path = url.pathname.replace(/\/+$/, '') || '/'
+
+  if (path === '/api/health' && (request.method === 'GET' || request.method === 'HEAD')) {
+    return json({
+      ok: true,
+      service: 'phildev-visio',
+      realtimeKitConfigured: hasApiToken(env) && hasHostSecret(env),
+    })
+  }
+
+  // Protection CSRF : une mutation cross-origin est refusée. Les clients sans
+  // en-tête `Origin` (curl, tests) restent acceptés : ils n'ont pas de session
+  // implicite à détourner.
+  if (request.method === 'POST') {
+    const origin = request.headers.get('Origin')
+    if (origin) {
+      let sameOrigin = false
+      try {
+        sameOrigin = new URL(origin).host === url.host
+      } catch {
+        sameOrigin = false
+      }
+      if (!sameOrigin) return failure(403, 'origin-refused', 'Origine non autorisée.')
+    }
+  }
+
+  if (path === '/api/host/session' && request.method === 'POST') {
+    return handleHostSession(request, env)
+  }
+  if (path === '/api/meetings' && request.method === 'POST') {
+    return handleCreateMeeting(request, env)
+  }
+  if (path === '/api/rtk/token' && request.method === 'POST') {
+    return handleParticipantToken(request, env)
+  }
+  if (path === '/api/rtk/diagnostic' && request.method === 'GET') {
+    return handleDiagnostic(request, env)
+  }
+
+  return failure(404, 'not-found', "Cette adresse d'API n'existe pas.")
+}
+
 export default {
   async fetch(request, env) {
+    const url = new URL(request.url)
+
+    if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
+      return routeApi(request, url, env)
+    }
+
     const response = await env.ASSETS.fetch(request)
 
     // Ressource servie, redirection, erreur autre que « introuvable » :

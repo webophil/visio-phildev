@@ -1,23 +1,57 @@
 /**
  * Identifiants de réunion.
  *
- * Phase 1 : les identifiants sont créés localement et ne désignent aucune
- * session distante. Ils servent uniquement à construire une URL de rendez-vous
- * du type `/rdv-aurore`. La résolution réelle de ces identifiants (création de
- * réunion + jeton participant) sera assurée côté serveur lors de l'intégration
- * Cloudflare RealtimeKit (Phase 2) — voir `src/meeting/transport`.
+ * L'identifiant lisible (`rdv-aurore`) nomme le rendez-vous dans l'URL ; il est
+ * **distinct** de l'identifiant de réunion Cloudflare RealtimeKit (UUID), qui
+ * accompagne le lien sous forme de paramètre `?r=`. Cette séparation permet aux
+ * liens d'invitation de rester lisibles tout en désignant une vraie réunion
+ * côté serveur.
  */
+
+/** Paramètre de lien transportant l'identifiant de réunion RealtimeKit. */
+export const MEETING_LINK_PARAM = 'r'
 
 /** Alphanumérique sans caractères ambigus (ni l/1/i, ni o/0). */
 const ALPHABET = 'abcdefghjkmnpqrstuvwxyz23456789'
 const GENERATED_LENGTH = 7
 
 const MEETING_ID_PATTERN = /^[a-z0-9](?:[a-z0-9-]{0,57}[a-z0-9])?$/
+const UUID_PATTERN = /^[0-9a-f]{8}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{4}-[0-9a-f]{12}$/i
 
 export const MEETING_PATH_PREFIX = '/rdv-'
 
 export const MEETING_ID_MIN_LENGTH = 2
 export const MEETING_ID_MAX_LENGTH = 59
+
+/**
+ * Vrai si la valeur est un identifiant Cloudflare (UUID).
+ * Sert à refuser un lien incomplet avant tout appel réseau.
+ */
+export function isRealtimeKitId(value: unknown): value is string {
+  return typeof value === 'string' && UUID_PATTERN.test(value.trim())
+}
+
+/** Génère un UUID v4 (repli sûr si `crypto.randomUUID` est indisponible). */
+export function generateUuid(): string {
+  if (typeof crypto.randomUUID === 'function') return crypto.randomUUID()
+
+  const bytes = new Uint8Array(16)
+  crypto.getRandomValues(bytes)
+  bytes[6] = (bytes[6] & 0x0f) | 0x40
+  bytes[8] = (bytes[8] & 0x3f) | 0x80
+
+  const hex = Array.from(bytes, (byte) => byte.toString(16).padStart(2, '0')).join('')
+  return `${hex.slice(0, 8)}-${hex.slice(8, 12)}-${hex.slice(12, 16)}-${hex.slice(16, 20)}-${hex.slice(20)}`
+}
+
+/**
+ * Identifiant d'invité, propre à un appareil et à une réunion.
+ * Il sert de `custom_participant_id` : une reconnexion réutilise le même
+ * emplacement, elle ne consomme pas une place supplémentaire.
+ */
+export function createGuestId(): string {
+  return generateUuid()
+}
 
 /** Génère un identifiant local lisible, ex. `k7m2pqd`. */
 export function createMeetingId(): string {

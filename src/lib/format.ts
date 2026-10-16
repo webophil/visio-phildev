@@ -1,4 +1,4 @@
-import { MEETING_PATH_PREFIX } from './ids'
+import { MEETING_LINK_PARAM, MEETING_PATH_PREFIX, isRealtimeKitId, parseMeetingInput } from './ids'
 
 /** Chemin interne d'une réunion, ex. `/rdv-aurore`. */
 export function meetingPath(meetingId: string): string {
@@ -7,8 +7,50 @@ export function meetingPath(meetingId: string): string {
 
 /**
  * URL publique complète à partager avec un participant.
- * En Phase 1 elle pointe vers l'appareil courant : aucune salle distante
- * n'existe encore (voir `PHASE_2.meetingLinks`).
+ * Elle porte l'identifiant de réunion Cloudflare (`?r=`) : c'est l'invitation
+ * elle-même. Aucun jeton de participation n'y figure.
+ */
+export function buildInvitationUrl(meetingId: string, realtimeKitId: string, origin?: string): string {
+  const base = (origin ?? window.location.origin).replace(/\/+$/, '')
+  const link = `${base}${meetingPath(meetingId)}?${MEETING_LINK_PARAM}=${encodeURIComponent(realtimeKitId)}`
+  return link
+}
+
+export interface MeetingLink {
+  meetingId: string
+  /** Identifiant de réunion Cloudflare, `null` si le lien ne le porte pas. */
+  realtimeKitId: string | null
+}
+
+/**
+ * Analyse une saisie utilisateur : identifiant seul (`aurore`), chemin interne
+ * (`/rdv-aurore`) ou lien d'invitation complet, paramètre `?r=` compris.
+ */
+export function parseMeetingLink(input: string): MeetingLink | null {
+  const raw = input.trim()
+  if (!raw) return null
+
+  const meetingId = parseMeetingInput(raw)
+  if (!meetingId) return null
+
+  let realtimeKitId: string | null = null
+  const queryIndex = raw.indexOf('?')
+
+  if (queryIndex >= 0) {
+    try {
+      const value = new URLSearchParams(raw.slice(queryIndex + 1)).get(MEETING_LINK_PARAM)
+      if (isRealtimeKitId(value)) realtimeKitId = value.trim()
+    } catch {
+      realtimeKitId = null
+    }
+  }
+
+  return { meetingId, realtimeKitId }
+}
+
+/**
+ * URL du rendez-vous sans identifiant Cloudflare : conservée pour l'affichage
+ * interne (barre d'adresse, titres) et pour les liens déjà partagés en Phase 1.
  */
 export function buildMeetingUrl(meetingId: string, origin?: string): string {
   const base = (origin ?? window.location.origin).replace(/\/+$/, '')

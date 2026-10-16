@@ -1,4 +1,14 @@
-import { Clock, Info, ShieldCheck, Users, WifiOff } from 'lucide-react'
+import { RealtimeKitProvider } from '@cloudflare/realtimekit-react'
+import {
+  Clock,
+  Crown,
+  Info,
+  Loader2,
+  ShieldCheck,
+  Users,
+  Wifi,
+  WifiOff,
+} from 'lucide-react'
 
 import { PhilDevLogo } from '../Brand/PhilDevLogo'
 import { BackgroundEffectsPanel } from '../meeting/BackgroundEffectsPanel'
@@ -7,23 +17,44 @@ import { ControlBar } from '../meeting/ControlBar'
 import { InviteLinkButton } from '../meeting/InviteLinkButton'
 import { MeetingStage } from '../meeting/MeetingStage'
 import { ParticipantsPanel } from '../meeting/ParticipantsPanel'
+import { Button } from '../ui/Button'
+import { Notice } from '../ui/Notice'
 import { StatusPill } from '../ui/StatusPill'
 import { formatDuration, pluralize } from '../../lib/format'
-import { PHASE_2 } from '../../lib/notices'
+import { NOTICES } from '../../lib/notices'
 import { useMeeting } from '../../state/meetingContext'
 
 /**
  * Interface de réunion.
- * Toutes les informations affichées proviennent de l'état réel : durée mesurée
- * localement, participant unique, état du transport. Aucune connectivité ni
- * participant distant n'est suggéré.
+ * Toutes les informations affichées proviennent de la session réelle : nombre
+ * de participants connectés, état de connexion, durée mesurée localement et
+ * erreurs remontées par le SDK.
  */
 export function MeetingScreen() {
-  const { meetingName, meetingId, durationMs, activePanel, closePanel, transport } = useMeeting()
+  const { client } = useMeeting()
 
-  const participantCount = 1
+  if (!client) return <ConnectingScreen />
+
+  return (
+    <RealtimeKitProvider value={client}>
+      <MeetingLayout />
+    </RealtimeKitProvider>
+  )
+}
+
+function MeetingLayout() {
+  const { meetingName, meetingId, durationMs, activePanel, closePanel, transport, session, isHost, clearSessionError } =
+    useMeeting()
+
+  const participantCount = session.participants.length
   const connectionLabel =
-    transport.connection === 'connected' ? 'Connecté' : 'Session locale (aucun serveur)'
+    transport.connection === 'connected'
+      ? 'Connecté'
+      : transport.connection === 'reconnecting'
+        ? 'Reconnexion…'
+        : transport.connection === 'connecting'
+          ? 'Connexion…'
+          : 'Déconnecté'
 
   return (
     <div className="flex min-h-dvh flex-col bg-ink-950">
@@ -38,25 +69,33 @@ export function MeetingScreen() {
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
-          <StatusPill
-            tone="neutral"
-            icon={<Clock aria-hidden="true" className="size-3.5" />}
-          >
+          {isHost ? (
+            <StatusPill tone="neutral" icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}>
+              Organisateur
+            </StatusPill>
+          ) : null}
+
+          <StatusPill tone="neutral" icon={<Clock aria-hidden="true" className="size-3.5" />}>
             <span className="tabular-nums" aria-label="Durée de la réunion">
               {formatDuration(durationMs)}
             </span>
           </StatusPill>
 
-          <StatusPill
-            tone="info"
-            icon={<Users aria-hidden="true" className="size-3.5" />}
-          >
+          <StatusPill tone="info" icon={<Users aria-hidden="true" className="size-3.5" />}>
             {participantCount} {pluralize(participantCount, 'participant', 'participants')}
           </StatusPill>
 
           <StatusPill
             tone={transport.connection === 'connected' ? 'info' : 'warning'}
-            icon={<WifiOff aria-hidden="true" className="size-3.5" />}
+            icon={
+              transport.connection === 'connected' ? (
+                <Wifi aria-hidden="true" className="size-3.5" />
+              ) : transport.connection === 'disconnected' ? (
+                <WifiOff aria-hidden="true" className="size-3.5" />
+              ) : (
+                <Loader2 aria-hidden="true" className="size-3.5 animate-spin" />
+              )
+            }
           >
             {connectionLabel}
           </StatusPill>
@@ -64,6 +103,22 @@ export function MeetingScreen() {
           <InviteLinkButton />
         </div>
       </header>
+
+      {session.error ? (
+        <div className="px-4 pt-3 sm:px-6">
+          <Notice
+            tone="danger"
+            title="Réunion"
+            action={
+              <Button variant="secondary" size="sm" onClick={clearSessionError}>
+                Masquer
+              </Button>
+            }
+          >
+            {session.error.message}
+          </Notice>
+        </div>
+      ) : null}
 
       <main className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4 lg:flex-row">
         <div className="flex min-h-0 flex-1 flex-col gap-3">
@@ -79,11 +134,12 @@ export function MeetingScreen() {
       <footer className="flex flex-col gap-2 px-4 pb-4 sm:px-6">
         <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
           <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-slate-500" />
-          {PHASE_2.remoteParticipants}
+          {NOTICES.capacity}
         </p>
         <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-500">
           <ShieldCheck aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-          Votre flux audio et vidéo n&apos;est transmis à aucun serveur en Phase 1.
+          Votre flux audio et vidéo est transmis aux participants de cette réunion via Cloudflare
+          RealtimeKit. Il n’est ni enregistré ni conservé par l’application.
         </p>
       </footer>
 
@@ -95,6 +151,19 @@ export function MeetingScreen() {
           className="fixed inset-0 z-20 bg-ink-950/60 lg:hidden"
         />
       ) : null}
+    </div>
+  )
+}
+
+/** Attente de l'initialisation du client RealtimeKit (avant la première image). */
+function ConnectingScreen() {
+  return (
+    <div className="stage-backdrop flex min-h-dvh flex-col items-center justify-center gap-4 text-center">
+      <Loader2 aria-hidden="true" className="size-8 animate-spin text-accent-300" />
+      <h1 className="font-display text-xl font-semibold text-white">Connexion à la réunion…</h1>
+      <p className="max-w-sm text-sm text-slate-400">
+        Ouverture de la salle Cloudflare RealtimeKit. Cette étape dure quelques secondes.
+      </p>
     </div>
   )
 }

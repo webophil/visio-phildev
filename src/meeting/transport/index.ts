@@ -1,19 +1,14 @@
-import { LocalOnlyTransport } from './LocalOnlyTransport'
+import { RealtimeKitTransport } from './RealtimeKitTransport'
 import type { MeetingTransport, MeetingTransportOptions } from './types'
 
 export type { MeetingTransport, MeetingTransportOptions } from './types'
-export { LocalOnlyTransport }
+export { RealtimeKitTransport }
 
 /**
  * Fabrique de transport utilisée par la couche état.
- *
- * Phase 1 : transport strictement local (aucun réseau).
- * Phase 2 : renvoyer ici le transport RealtimeKit, par exemple
- *
- *   return createRealtimeKitTransport(options)
- *
- * sans modifier les composants, qui ne dépendent que de `MeetingTransport`.
+ * Les composants ne dépendent que de `MeetingTransport` : remplacer
+ * l'infrastructure temps réel ne les touche pas.
  */
 export function createTransport(options: MeetingTransportOptions): MeetingTransport {
-  return new LocalOnlyTransport(options)
+  return new RealtimeKitTransport(options)
 }

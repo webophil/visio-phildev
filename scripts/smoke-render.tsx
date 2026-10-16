@@ -2,9 +2,12 @@ import { renderToStaticMarkup } from 'react-dom/server'
 
 import { UnknownRouteScreen } from '../src/components/screens/UnknownRouteScreen'
 import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
-import { createMeetingId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
-import { buildMeetingUrl, formatDuration, meetingPath } from '../src/lib/format'
-import { parsePath } from '../src/lib/router'
+import { createMeetingId, generateUuid, isRealtimeKitId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
+import { mediaFailure } from '../src/lib/mediaErrors'
+import { MeetingApiError } from '../src/meeting/rtkApi'
+import { describeSessionError } from '../src/meeting/rtkErrors'
+import { buildInvitationUrl, buildMeetingUrl, formatDuration, meetingPath, parseMeetingLink } from '../src/lib/format'
+import { parsePath, readRealtimeKitId } from '../src/lib/router'
 
 const checks: { name: string; run: () => void }[] = []
 
@@ -12,6 +15,8 @@ function expect(condition: boolean, label: string) {
   if (!condition) throw new Error(`ÉCHEC : ${label}`)
   console.log(`  ok  ${label}`)
 }
+
+const UUID = '497f6eca-6276-4993-bfeb-53cbbbba6f08'
 
 // --- Routeur -------------------------------------------------------------
 checks.push({
@@ -29,6 +34,19 @@ checks.push({
     )
     expect(parsePath('/rdv-ab').name === 'meeting', 'identifiant de 2 caractères accepté')
     expect(parsePath('/inconnu').name === 'unknown', 'route inconnue détectée')
+
+    const withLink = parsePath('/rdv-aurore', `?r=${UUID}`)
+    expect(
+      withLink.name === 'meeting' && withLink.realtimeKitId === UUID,
+      'identifiant Cloudflare lu depuis le lien',
+    )
+    const badLink = parsePath('/rdv-aurore', '?r=pas-un-uuid')
+    expect(
+      badLink.name === 'meeting' && badLink.realtimeKitId === null,
+      'identifiant Cloudflare invalide ignoré',
+    )
+    expect(readRealtimeKitId(`?autre=1&r=${UUID}`) === UUID, 'paramètre retrouvé parmi d’autres')
+    expect(readRealtimeKitId('') === null, 'aucun paramètre → null')
   },
 })
 
@@ -56,6 +74,17 @@ checks.push({
       meetingDisplayName('visio-client-dupont') === 'Visio Client Dupont',
       'nom affiché multi-mots',
     )
+
+    expect(isRealtimeKitId(UUID), 'UUID Cloudflare reconnu')
+    expect(!isRealtimeKitId('rdv-aurore'), 'identifiant lisible refusé comme UUID')
+    expect(!isRealtimeKitId(null), 'valeur absente refusée')
+
+    const uuid = generateUuid()
+    expect(
+      /^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/.test(uuid),
+      'UUID v4 généré conforme',
+    )
+    expect(generateUuid() !== uuid, 'deux UUID générés diffèrent')
   },
 })
 
@@ -70,8 +99,92 @@ checks.push({
     expect(
       buildMeetingUrl('aurore', 'https://visio.phildev.online/') ===
         'https://visio.phildev.online/rdv-aurore',
-      'URL publique d’invitation',
+      'URL publique sans identifiant Cloudflare',
     )
+    expect(
+      buildInvitationUrl('aurore', UUID, 'https://visio.phildev.online/') ===
+        `https://visio.phildev.online/rdv-aurore?r=${UUID}`,
+      'lien d’invitation complet',
+    )
+  },
+})
+
+// --- Analyse d'un lien d'invitation --------------------------------------
+checks.push({
+  name: 'lien d’invitation',
+  run: () => {
+    const full = parseMeetingLink(`https://visio.phildev.online/rdv-aurore?r=${UUID}`)
+    expect(
+      full !== null && full.meetingId === 'aurore' && full.realtimeKitId === UUID,
+      'lien complet analysé',
+    )
+
+    const bare = parseMeetingLink('rdv-aurore')
+    expect(bare !== null && bare.meetingId === 'aurore' && bare.realtimeKitId === null, 'identifiant seul accepté')
+
+    const invalidLink = parseMeetingLink('https://visio.phildev.online/rdv-aurore?r=xyz')
+    expect(
+      invalidLink !== null && invalidLink.realtimeKitId === null,
+      'paramètre invalide neutralisé',
+    )
+
+    expect(parseMeetingLink('   ') === null, 'saisie vide rejetée')
+    expect(parseMeetingLink('!!!') === null, 'saisie invalide rejetée')
+  },
+})
+
+// --- Erreurs : API et périphériques --------------------------------------
+checks.push({
+  name: 'erreurs',
+  run: () => {
+    const invalidToken = describeSessionError({ code: '0004', name: 'ClientError' })
+    expect(invalidToken.canRetry, 'jeton invalide : nouvelle tentative proposée')
+    expect(
+      invalidToken.message.includes('plus valide'),
+      'jeton invalide : message explicite',
+    )
+
+    const unsupported = describeSessionError({ code: '0010' })
+    expect(!unsupported.canRetry, 'navigateur non pris en charge : pas de relance')
+    expect(unsupported.message.includes('navigateur'), 'message orienté navigateur')
+
+    const network = describeSessionError({ code: '0012' })
+    expect(network.canRetry, 'coupure réseau : relance possible')
+
+    const denied = describeSessionError(new DOMException('refus', 'NotAllowedError'))
+    expect(
+      denied.message.includes('refusé') && denied.canRetry,
+      'permission refusée traduite en français',
+    )
+
+    const busy = describeSessionError(new DOMException('occupé', 'NotReadableError'))
+    expect(busy.message.includes('déjà utilisé'), 'périphérique occupé expliqué')
+
+    const full = describeSessionError(
+      new MeetingApiError({ status: 409, code: 'meeting-full', message: 'Réunion complète' }),
+    )
+    expect(!full.canRetry, 'réunion complète : relance inutile')
+    expect(full.message === 'Réunion complète', 'message du serveur conservé')
+
+    const unauthorized = describeSessionError(
+      new MeetingApiError({ status: 401, code: 'host-unauthorized', message: 'Accès requis' }),
+    )
+    expect(!unauthorized.canRetry, 'refus d\u2019autorisation : pas de relance automatique')
+
+    const offline = describeSessionError(
+      new MeetingApiError({ status: 0, code: 'network', message: 'Serveur injoignable' }),
+    )
+    expect(offline.canRetry && offline.message.includes('injoignable'), 'réseau absent expliqué')
+
+    const unknown = describeSessionError(undefined)
+    expect(unknown.code === 'unknown' && unknown.canRetry, 'erreur inconnue traitée')
+
+    expect(mediaFailure('permission-denied').canRetry, 'échec matériel : permission réessayable')
+    expect(
+      mediaFailure('unsupported').canRetry === false,
+      'API média absente : aucune relance proposée',
+    )
+    expect(mediaFailure('no-device').title.includes('Aucun périphérique'), 'matériel absent expliqué')
   },
 })
 
@@ -79,13 +192,12 @@ checks.push({
 checks.push({
   name: 'écran d’accueil',
   run: () => {
-    const html = renderToStaticMarkup(
-      <WelcomeScreen onCreateMeeting={() => {}} onJoinMeeting={() => {}} />,
-    )
+    const html = renderToStaticMarkup(<WelcomeScreen onJoinMeeting={() => {}} />)
     expect(html.includes('Vos rendez-vous,'), 'slogan présent')
     expect(html.includes('Créer une réunion'), 'bouton de création')
     expect(html.includes('Rejoindre'), 'bouton rejoindre')
-    expect(html.includes('Lien ou identifiant de réunion'), 'champ d’identifiant')
+    expect(html.includes('Lien d’invitation'), 'champ de lien')
+    expect(html.includes('Accès organisateur'), 'accès protégé de l’organisateur')
     expect(html.includes('PhilDEV'), 'marque PhilDEV')
     expect(html.includes('Visio'), 'marque Visio')
     expect(html.includes('lang="fr"') === false, 'aucun attribut parasite')

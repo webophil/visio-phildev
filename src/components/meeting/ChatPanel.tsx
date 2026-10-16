@@ -3,7 +3,7 @@ import { Info, MessageSquare, Send } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { SidePanel } from '../ui/SidePanel'
-import { PHASE_2 } from '../../lib/notices'
+import { NOTICES } from '../../lib/notices'
 import { useMeeting } from '../../state/meetingContext'
 
 /**
@@ -25,8 +25,8 @@ export function ChatPanel() {
             <input
               type="text"
               disabled
-              aria-label="Message (indisponible en Phase 1)"
-              placeholder="Chat indisponible en Phase 1"
+              aria-label="Message (indisponible)"
+              placeholder="Chat indisponible"
               className="h-10 min-w-0 flex-1 cursor-not-allowed rounded-xl border border-ink-600 bg-ink-850 px-3 text-sm text-slate-400 placeholder:text-slate-500"
             />
             <Button variant="secondary" size="sm" disabled aria-label="Envoyer (indisponible)">
@@ -50,15 +50,15 @@ export function ChatPanel() {
 
         <Notice
           tone="info"
-          title="Phase 2 — chat d'équipe"
+          title="Chat non disponible"
           action={
             <span className="flex items-center gap-1.5 text-[11px] text-slate-500">
               <Info aria-hidden="true" className="size-3.5" />
-              Aucun serveur de messages n&apos;est connecté.
+              Aucun message n&apos;est transmis ni conservé.
             </span>
           }
         >
-          {PHASE_2.chat}
+          {NOTICES.chat}
         </Notice>
       </div>
     </SidePanel>

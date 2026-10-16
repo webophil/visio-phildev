@@ -2,7 +2,7 @@ import { Check, Lock, Sparkles, WandSparkles } from 'lucide-react'
 
 import { Notice } from '../ui/Notice'
 import { SidePanel } from '../ui/SidePanel'
-import { PHASE_2 } from '../../lib/notices'
+import { NOTICES } from '../../lib/notices'
 import { useMeeting } from '../../state/meetingContext'
 
 interface EffectOption {
@@ -58,8 +58,8 @@ export function BackgroundEffectsPanel() {
   return (
     <SidePanel title="Effets de fond" icon={WandSparkles} onClose={closePanel}>
       <div className="flex flex-col gap-4">
-        <Notice tone="info" title="Non implémenté en Phase 1">
-          {PHASE_2.backgroundEffects}
+        <Notice tone="info" title="Effets non disponibles">
+          {NOTICES.backgroundEffects}
         </Notice>
 
         <ul className="flex flex-col gap-2" role="list">
@@ -75,7 +75,7 @@ export function BackgroundEffectsPanel() {
                   title={
                     effect.available
                       ? effect.label
-                      : 'Indisponible en Phase 1 — segmentation vidéo non branchée'
+                      : 'Indisponible — segmentation vidéo non branchée'
                   }
                   className={[
                     'flex w-full items-center gap-3 rounded-xl border p-3 text-left transition-colors',
@@ -120,7 +120,7 @@ export function BackgroundEffectsPanel() {
         <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
           <Sparkles aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-slate-500" />
           {hasVideo
-            ? 'Votre flux vidéo est transmis sans retouche : aucune donnée ne quitte votre appareil.'
+            ? 'Votre flux vidéo est transmis aux participants sans retouche : aucun effet n’est appliqué.'
             : 'Activez votre caméra pour visualiser un éventuel effet.'}
         </p>
       </div>
