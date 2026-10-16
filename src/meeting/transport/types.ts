@@ -1,24 +1,37 @@
-import type { TransportState } from '../../types/meeting'
+import type RTKClient from '@cloudflare/realtimekit'
+import type { RTKSelfMedia } from '@cloudflare/realtimekit'
+
+import type { MeetingSessionState, TransportState } from '../../types/meeting'
 
 /**
  * Frontière d'intégration vers l'infrastructure temps réel.
  *
- * Phase 1 : `LocalOnlyTransport` est la seule implémentation. Elle ne parle à
- * aucun serveur, ne crée aucun RTCPeerConnection et ne simule aucun participant
- * distant.
- *
- * Phase 2 : un `RealtimeKitTransport` (Cloudflare RealtimeKit, SFU) implémentera
- * cette même interface. Le navigateur n'aura jamais accès au jeton d'API
- * Cloudflare : seul un jeton participant, délivré par un Worker, sera utilisé.
- * Aucune modification des composants ne sera nécessaire.
+ * L'interface reste le seul point de contact entre les composants et le SDK :
+ * l'implémentation actuelle est `RealtimeKitTransport` (Cloudflare RealtimeKit,
+ * SFU). Le navigateur n'a jamais accès au jeton d'API Cloudflare : il ne reçoit
+ * qu'un jeton participant, délivré par le Worker.
  */
 export interface MeetingTransportOptions {
+  /** Identifiant lisible de la réunion (route `/rdv-…`). */
   meetingId: string
+  /** Identifiant de réunion Cloudflare RealtimeKit, `null` si le lien est incomplet. */
+  realtimeKitId: string | null
+  /** Nom affiché du participant. */
   displayName: string
+  /** Rôle demandé : l'accès hôte est refusé par le serveur s'il n'est pas prouvé. */
+  role: 'host' | 'guest'
+  /** Jeton de session organisateur, transmis en en-tête (jamais en URL). */
+  hostToken: string | null
+  /**
+   * Support média déjà acquis par le SDK lors de l'écran de préparation.
+   * Le transmettre évite une seconde capture des périphériques.
+   */
+  mediaHandler: RTKSelfMedia | null
 }
 
 export interface MeetingTransport {
   readonly meetingId: string
+  readonly realtimeKitId: string | null
 
   /** État courant du transport (mode, connexion, capacités). */
   getState(): TransportState
@@ -26,21 +39,27 @@ export interface MeetingTransport {
   /** Observe les changements d'état ; renvoie la fonction de désabonnement. */
   subscribe(listener: (state: TransportState) => void): () => void
 
-  /** Rejoint la session. */
+  /** Rejoint la session : jeton participant, initialisation du SDK, connexion. */
   join(): Promise<void>
 
   /** Quitte la session et libère les ressources du transport. */
   leave(): Promise<void>
 
-  /** Déclare le flux local (caméra / micro) auprès du transport. */
-  publishLocalMedia(stream: MediaStream | null): Promise<void>
+  /** Instantané de la session temps réel (participants, médias, erreurs). */
+  getSession(): MeetingSessionState
 
-  /** Déclare le flux de partage d'écran auprès du transport. */
-  publishScreenShare(stream: MediaStream | null): Promise<void>
+  /** Observe les changements de session ; renvoie la fonction de désabonnement. */
+  subscribeSession(listener: (session: MeetingSessionState) => void): () => void
 
-  setMicrophoneEnabled(enabled: boolean): void
+  /** Client RealtimeKit, exposé uniquement à l'interface de la salle. */
+  getClient(): RTKClient | null
 
-  setCameraEnabled(enabled: boolean): void
+  /** Efface l'erreur de session affichée (après accusé de réception). */
+  clearError(): void
+
+  setMicrophoneEnabled(enabled: boolean): Promise<void>
+  setCameraEnabled(enabled: boolean): Promise<void>
+  setScreenShareEnabled(enabled: boolean): Promise<void>
 }
 
 export type MeetingTransportFactory = (options: MeetingTransportOptions) => MeetingTransport

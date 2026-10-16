@@ -1,6 +1,11 @@
 {
   "entrypoint": "index.js",
   "compatibilityDate": "2026-10-13",
-  "modules": [{ "name": "index.js", "type": "esm", "path": "./worker/index.js" }],
+  "modules": [
+    { "name": "index.js", "type": "esm", "path": "./worker/index.js" },
+    { "name": "realtimekit.js", "type": "esm", "path": "./worker/realtimekit.js" },
+    { "name": "hostAuth.js", "type": "esm", "path": "./worker/hostAuth.js" },
+    { "name": "rateLimit.js", "type": "esm", "path": "./worker/rateLimit.js" }
+  ],
   "assetsDirectory": "./dist"
 }

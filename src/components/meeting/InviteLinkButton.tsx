@@ -1,10 +1,10 @@
 import { useCallback, useEffect, useRef, useState } from 'react'
-import { Check, Copy, Link2 } from 'lucide-react'
+import { AlertTriangle, Check, Copy, Link2 } from 'lucide-react'
 
 import { Button } from '../ui/Button'
 import type { ButtonSize, ButtonVariant } from '../ui/Button'
 import { copyTextToClipboard } from '../../lib/clipboard'
-import { buildMeetingUrl } from '../../lib/format'
+import { buildInvitationUrl } from '../../lib/format'
 import { useMeeting } from '../../state/meetingContext'
 
 type CopyState = 'idle' | 'copied' | 'error'
@@ -15,12 +15,17 @@ export interface InviteLinkButtonProps {
   className?: string
 }
 
+/**
+ * Copie le lien d'invitation.
+ * Le lien contient l'identifiant de la réunion Cloudflare (`?r=`) mais **aucun
+ * jeton** : chaque participant reçoit le sien au moment où il rejoint.
+ */
 export function InviteLinkButton({
   variant = 'secondary',
   size = 'sm',
   className,
 }: InviteLinkButtonProps) {
-  const { meetingId } = useMeeting()
+  const { meetingId, realtimeKitId } = useMeeting()
   const [state, setState] = useState<CopyState>('idle')
   const timeoutRef = useRef<number | null>(null)
 
@@ -30,20 +35,35 @@ export function InviteLinkButton({
     }
   }, [])
 
+  const invitationUrl = realtimeKitId ? buildInvitationUrl(meetingId, realtimeKitId) : null
+
   const handleCopy = useCallback(async () => {
-    const succeeded = await copyTextToClipboard(buildMeetingUrl(meetingId))
+    if (!invitationUrl) return
+
+    const succeeded = await copyTextToClipboard(invitationUrl)
     setState(succeeded ? 'copied' : 'error')
 
     if (timeoutRef.current !== null) window.clearTimeout(timeoutRef.current)
     timeoutRef.current = window.setTimeout(() => setState('idle'), 2500)
-  }, [meetingId])
+  }, [invitationUrl])
+
+  if (!invitationUrl) {
+    return (
+      <Button
+        variant="secondary"
+        size={size}
+        className={className}
+        disabled
+        title="Lien indisponible : l'identifiant de réunion Cloudflare est absent."
+      >
+        <AlertTriangle aria-hidden="true" className="size-4 text-amber-300" />
+        Lien incomplet
+      </Button>
+    )
+  }
 
   const label =
-    state === 'copied'
-      ? 'Lien copié'
-      : state === 'error'
-        ? 'Copie impossible'
-        : 'Copier le lien'
+    state === 'copied' ? 'Lien copié' : state === 'error' ? 'Copie impossible' : 'Copier le lien'
 
   return (
     <Button
@@ -52,7 +72,7 @@ export function InviteLinkButton({
       className={className}
       onClick={() => void handleCopy()}
       aria-live="polite"
-      title={buildMeetingUrl(meetingId)}
+      title={invitationUrl}
     >
       {state === 'copied' ? (
         <Check aria-hidden="true" className="size-4 text-emerald-300" />

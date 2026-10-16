@@ -2,6 +2,7 @@ import { useState } from 'react'
 import {
   CameraOff,
   ChevronLeft,
+  Crown,
   Loader2,
   Lock,
   Mic,
@@ -10,6 +11,7 @@ import {
   UserRound,
   Video,
   VideoOff,
+  Wifi,
 } from 'lucide-react'
 
 import { PhilDevLogo } from '../Brand/PhilDevLogo'
@@ -20,7 +22,7 @@ import { StatusPill } from '../ui/StatusPill'
 import { TextField } from '../ui/TextField'
 import { VideoPlaceholder, VideoSurface } from '../meeting/VideoSurface'
 import { useMeeting } from '../../state/meetingContext'
-import { PHASE_2 } from '../../lib/notices'
+import { NOTICES } from '../../lib/notices'
 import { mediaDevicesSupported } from '../../lib/mediaErrors'
 
 export interface PreJoinScreenProps {
@@ -28,41 +30,55 @@ export interface PreJoinScreenProps {
 }
 
 /**
- * Écran de préparation : aperçu réel de la caméra, choix du nom et des
- * périphériques. Aucune fausse permission : les erreurs du navigateur sont
- * affichées telles quelles, traduites en français.
+ * Écran de préparation : aperçu réel de la caméra (capture assurée par le SDK),
+ * choix du nom et des périphériques. Aucune fausse permission : les erreurs du
+ * navigateur sont affichées telles quelles, traduites en français.
  */
 export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
-  const { meetingName, meetingId, participantName, setParticipantName, media, joinMeeting } =
-    useMeeting()
-  const [joining, setJoining] = useState(false)
+  const {
+    meetingName,
+    meetingId,
+    participantName,
+    setParticipantName,
+    media,
+    joinMeeting,
+    joining,
+    joinError,
+    clearJoinError,
+    toggleAudio,
+    toggleVideo,
+    isHost,
+    session,
+  } = useMeeting()
+
   const [nameError, setNameError] = useState<string | null>(null)
+  const [pending, setPending] = useState(false)
 
   const supportsMedia = mediaDevicesSupported()
   const hasVideo = media.hasVideoTrack && media.videoEnabled
   const audioActive = media.hasAudioTrack && media.audioEnabled
-  const audioState = media.audioState
-  const requestPending = audioState === 'requesting' || media.videoState === 'requesting'
+  const requestPending = media.audioState === 'requesting' || media.videoState === 'requesting'
+  const busy = joining || pending
 
   const handleJoin = async () => {
     if (participantName.trim().length < 2) {
-      setNameError('Indiquez au moins deux caractères pour que les autres participants vous identifient.')
+      setNameError(
+        'Indiquez au moins deux caractères pour que les autres participants vous identifient.',
+      )
       return
     }
 
     setNameError(null)
-    setJoining(true)
+    setPending(true)
     try {
       await joinMeeting()
     } finally {
-      setJoining(false)
+      setPending(false)
     }
   }
 
   const permissionMessage =
-    media.audioState === 'denied' || media.videoState === 'denied'
-      ? "L'accès a été refusé."
-      : null
+    media.audioState === 'denied' || media.videoState === 'denied' ? "L'accès a été refusé." : null
 
   return (
     <div className="stage-backdrop flex min-h-dvh flex-col">
@@ -78,7 +94,20 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
           </button>
           <PhilDevLogo size="sm" />
         </div>
-        <StatusPill tone="neutral">Salle locale · Phase 1</StatusPill>
+
+        <div className="flex items-center gap-2">
+          <StatusPill tone="info" icon={<Wifi aria-hidden="true" className="size-3.5" />}>
+            Cloudflare RealtimeKit
+          </StatusPill>
+          {isHost ? (
+            <StatusPill
+              tone="neutral"
+              icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}
+            >
+              Organisateur
+            </StatusPill>
+          ) : null}
+        </div>
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-5 pb-10 sm:px-8">
@@ -93,6 +122,20 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
             </span>
           </p>
         </div>
+
+        {joinError ? (
+          <Notice
+            tone="danger"
+            title="Entrée en réunion impossible"
+            action={
+              <Button variant="secondary" size="sm" onClick={clearJoinError}>
+                Masquer
+              </Button>
+            }
+          >
+            {joinError.message}
+          </Notice>
+        ) : null}
 
         {!supportsMedia ? (
           <Notice tone="danger" title="Navigateur non compatible">
@@ -161,7 +204,7 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
                   )}
                 </span>
                 <span className="flex items-center gap-1.5 text-xs text-slate-300">
-                  {media.audioEnabled && media.hasAudioTrack ? (
+                  {audioActive ? (
                     <>
                       <Mic aria-hidden="true" className="size-3.5 text-emerald-300" />
                       Micro actif
@@ -181,7 +224,7 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
                   sans piste (refus, matériel absent) propose de le rétablir. */}
               <Button
                 variant={audioActive ? 'secondary' : 'danger'}
-                onClick={() => void media.setAudioEnabled(!audioActive)}
+                onClick={() => void toggleAudio(!audioActive)}
                 aria-pressed={audioActive}
                 disabled={!supportsMedia}
               >
@@ -195,7 +238,7 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
 
               <Button
                 variant={hasVideo ? 'secondary' : 'danger'}
-                onClick={() => void media.setVideoEnabled(!hasVideo)}
+                onClick={() => void toggleVideo(!hasVideo)}
                 aria-pressed={hasVideo}
                 disabled={!supportsMedia}
               >
@@ -220,6 +263,11 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
                 Autoriser caméra et micro
               </Button>
             </div>
+
+            <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
+              <UserRound aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
+              {NOTICES.deviceFallback}
+            </p>
           </section>
 
           <section className="surface-panel flex flex-col gap-5 rounded-2xl p-5">
@@ -228,7 +276,7 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
               placeholder="Aurore Dupont"
               value={participantName}
               error={nameError}
-              hint="Ce nom s'affiche pendant la réunion. Il reste sur cet appareil."
+              hint="Ce nom s'affiche pendant la réunion et n'est visible que des participants."
               autoComplete="name"
               maxLength={60}
               onChange={(event) => {
@@ -277,26 +325,28 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
             ) : null}
 
             <div className="mt-auto flex flex-col gap-3 border-t border-ink-700 pt-4">
-              <Button size="lg" onClick={() => void handleJoin()} disabled={joining} className="w-full">
-                {joining ? (
+              <Button size="lg" onClick={() => void handleJoin()} disabled={busy} className="w-full">
+                {busy ? (
                   <Loader2 aria-hidden="true" className="size-5 animate-spin" />
                 ) : (
                   <Video aria-hidden="true" className="size-5" />
                 )}
-                Rejoindre la réunion
+                {busy ? 'Connexion…' : 'Rejoindre la réunion'}
               </Button>
+
               <p className="flex items-start gap-1.5 text-xs leading-relaxed text-slate-400">
                 <Lock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-slate-500" />
-                {PHASE_2.remoteParticipants}
+                {NOTICES.capacity}
+              </p>
+
+              <p className="text-xs leading-relaxed text-slate-500">
+                {session.maxParticipants > 0
+                  ? `Cette réunion accepte ${session.maxParticipants} personnes au maximum.`
+                  : 'Votre nom et votre matériel seront transmis aux participants de la réunion.'}
               </p>
             </div>
           </section>
         </div>
-
-        <p className="flex items-center gap-2 text-xs text-slate-500">
-          <UserRound aria-hidden="true" className="size-3.5" />
-          Vous rejoindrez la salle seul : la connexion des invités distants arrivera en Phase 2.
-        </p>
       </main>
     </div>
   )

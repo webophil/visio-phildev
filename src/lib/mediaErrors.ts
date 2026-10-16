@@ -93,6 +93,15 @@ function failure(reason: MediaFailureReason): MediaFailure {
   return MESSAGES[reason]
 }
 
+/**
+ * Message correspondant à une cause connue.
+ * Utilisé lorsque l'erreur ne vient pas d'une exception MediaDevices mais d'un
+ * état rapporté par le SDK (permission refusée, aucun périphérique…).
+ */
+export function mediaFailure(reason: MediaFailureReason): MediaFailure {
+  return MESSAGES[reason]
+}
+
 export function mediaDevicesSupported(): boolean {
   return (
     typeof navigator !== 'undefined' &&

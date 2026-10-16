@@ -1,8 +1,8 @@
 /**
  * Types du domaine « réunion ».
  * Ils constituent l'interface publique consommée par les composants : les
- * objets du SDK RealtimeKit (Phase 2) seront traduits vers ces types par
- * l'adaptateur de transport, jamais exposés directement à l'UI.
+ * objets du SDK RealtimeKit sont traduits vers ces types par l'adaptateur de
+ * transport (`src/meeting/transport`), jamais exposés directement à l'UI.
  */
 
 export type SessionPhase = 'prejoin' | 'in-meeting'
@@ -36,6 +36,9 @@ export interface LocalParticipant {
 
 export type TransportMode = 'local-only' | 'realtimekit'
 
+/** Rôle effectif d'un participant dans la réunion. */
+export type ParticipantRole = 'host' | 'guest'
+
 /**
  * État de connexion du transport.
  * `local` signifie explicitement : aucune connexion réseau n'est établie.
@@ -51,4 +54,75 @@ export interface TransportState {
   mode: TransportMode
   supportsRemoteParticipants: boolean
   connection: TransportConnectionState
+}
+
+/** Vue d'un participant (locale ou distante), dérivée du SDK. */
+export interface ParticipantView {
+  id: string
+  name: string
+  isLocal: boolean
+  isHost: boolean
+  audioEnabled: boolean
+  videoEnabled: boolean
+  screenShareEnabled: boolean
+}
+
+/** État média du participant local, tel que rapporté par le SDK. */
+export interface LiveSelfState {
+  audioEnabled: boolean
+  videoEnabled: boolean
+  screenShareEnabled: boolean
+  hasAudioTrack: boolean
+  hasVideoTrack: boolean
+}
+
+/** Partage d'écran en cours (local ou distant). */
+export interface ScreenShareState {
+  participantId: string
+  participantName: string
+  isLocal: boolean
+}
+
+/** Erreur lisible remontée par la couche temps réel. */
+export interface SessionError {
+  code: string
+  message: string
+  canRetry: boolean
+}
+
+/**
+ * Instantané de la session temps réel.
+ * Chaque valeur provient du SDK RealtimeKit : aucune n'est simulée.
+ */
+export interface MeetingSessionState {
+  connection: TransportConnectionState
+  /** Nombre maximum de participants autorisé pour la réunion. */
+  maxParticipants: number
+  /** Participants présents, participant local inclus en tête de liste. */
+  participants: ParticipantView[]
+  /** Nombre de participants distants effectivement connectés. */
+  remoteCount: number
+  self: LiveSelfState
+  screenShare: ScreenShareState | null
+  error: SessionError | null
+}
+
+export const EMPTY_SELF_STATE: LiveSelfState = {
+  audioEnabled: false,
+  videoEnabled: false,
+  screenShareEnabled: false,
+  hasAudioTrack: false,
+  hasVideoTrack: false,
+}
+
+export function emptySessionState(maxParticipants = 0): MeetingSessionState {
+  return {
+    connection: 'disconnected',
+    maxParticipants,
+    participants: [],
+    remoteCount: 0,
+    self: EMPTY_SELF_STATE,
+    screenShare: null,
+    error: null,
+  }
 }

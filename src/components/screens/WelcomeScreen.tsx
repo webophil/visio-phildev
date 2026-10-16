@@ -1,67 +1,123 @@
-import { useState } from 'react'
-import { ArrowRight, Link2, MonitorUp, ShieldCheck, Sparkles, Video, WifiOff } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import {
+  ArrowRight,
+  Crown,
+  KeyRound,
+  Link2,
+  Loader2,
+  MonitorUp,
+  ShieldCheck,
+  UserRound,
+  Video,
+} from 'lucide-react'
 
 import { PhilDevLogo } from '../Brand/PhilDevLogo'
+import { HostAccessDialog } from '../meeting/HostAccessDialog'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { StatusPill } from '../ui/StatusPill'
 import { TextField } from '../ui/TextField'
-import { parseMeetingInput } from '../../lib/ids'
-import { PHASE_2 } from '../../lib/notices'
+import { parseMeetingLink } from '../../lib/format'
+import type { MeetingLink } from '../../lib/format'
+import { NOTICES } from '../../lib/notices'
+import { readHostSession } from '../../meeting/hostSession'
+import { checkApiAvailability } from '../../meeting/rtkApi'
+import { useCreateMeeting } from '../../meeting/useCreateMeeting'
 
 const CAPABILITIES = [
   {
     icon: Video,
-    title: 'Caméra et micro réels',
+    title: 'Visioconférence réelle',
     description:
-      "Votre navigateur vous demande l'autorisation, aucune image n'est simulée : le flux vient directement de vos périphériques.",
+      'Audio et vidéo transitent par Cloudflare RealtimeKit : deux navigateurs distants se voient et se parlent vraiment.',
   },
   {
     icon: MonitorUp,
     title: "Partage d'écran natif",
     description:
-      'Écran, fenêtre ou onglet : le navigateur propose les sources disponibles via getDisplayMedia.',
+      'Écran, fenêtre ou onglet : le navigateur propose les sources disponibles, et les autres participants les voient.',
   },
   {
     icon: ShieldCheck,
-    title: 'Sans installation ni compte',
+    title: 'Sans compte pour les invités',
     description:
-      "Les participants invités ouvrent un lien et rejoignent la réunion depuis leur navigateur.",
+      "Un lien suffit : les invités saisissent leur nom et rejoignent la salle depuis leur navigateur.",
   },
 ] as const
 
 export interface WelcomeScreenProps {
-  onCreateMeeting: () => void
-  onJoinMeeting: (meetingId: string) => void
+  onJoinMeeting: (link: MeetingLink) => void
 }
 
-export function WelcomeScreen({ onCreateMeeting, onJoinMeeting }: WelcomeScreenProps) {
+/**
+ * Page d'accueil.
+ * La création de réunion est réservée à l'organisateur (session protégée par la
+ * clé `PHILDEV_HOST_KEY`) ; les invités rejoignent uniquement avec un lien.
+ */
+export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
   const [value, setValue] = useState('')
   const [error, setError] = useState<string | null>(null)
+  const [hostDialogOpen, setHostDialogOpen] = useState(false)
+  const [hostReady, setHostReady] = useState(() => readHostSession() !== null)
+  const [apiAvailable, setApiAvailable] = useState<boolean | null>(null)
+
+  const { start, busy, error: createError, clearError } = useCreateMeeting()
+
+  useEffect(() => {
+    let active = true
+    void checkApiAvailability().then((available) => {
+      if (active) setApiAvailable(available)
+    })
+    return () => {
+      active = false
+    }
+  }, [])
+
+  const handleCreate = () => {
+    clearError()
+    if (!hostReady) {
+      setHostDialogOpen(true)
+      return
+    }
+    void start()
+  }
 
   const handleJoin = () => {
-    const meetingId = parseMeetingInput(value)
+    const link = parseMeetingLink(value)
 
-    if (!meetingId) {
+    if (!link) {
       setError(
         value.trim().length === 0
-          ? 'Saisissez un lien ou un identifiant de réunion (ex. rdv-aurore).'
-          : "Cet identifiant de réunion n'est pas valide. Utilisez des lettres, des chiffres et des tirets (ex. rdv-aurore).",
+          ? 'Collez le lien d’invitation reçu (ex. …/rdv-aurore?r=…).'
+          : "Ce lien n'est pas valide. Attendu : une adresse terminée par /rdv-…, éventuellement suivie de ?r=.",
       )
       return
     }
 
     setError(null)
-    onJoinMeeting(meetingId)
+    onJoinMeeting(link)
   }
 
   return (
     <div className="stage-backdrop flex min-h-dvh flex-col">
       <header className="mx-auto flex w-full max-w-6xl items-center justify-between gap-4 px-5 py-5 sm:px-8">
         <PhilDevLogo size="md" />
-        <StatusPill tone="info" icon={<Sparkles aria-hidden="true" className="size-3.5" />}>
-          Phase 1 — aperçu technique
-        </StatusPill>
+
+        <div className="flex flex-wrap items-center gap-2">
+          {hostReady ? (
+            <StatusPill
+              tone="info"
+              icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}
+            >
+              Session organisateur
+            </StatusPill>
+          ) : null}
+
+          <Button variant="ghost" size="sm" onClick={() => setHostDialogOpen(true)}>
+            <KeyRound aria-hidden="true" className="size-4" />
+            Accès organisateur
+          </Button>
+        </div>
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-10 px-5 pb-12 sm:px-8 lg:flex-row lg:items-start lg:gap-14 lg:pt-6">
@@ -78,16 +134,13 @@ export function WelcomeScreen({ onCreateMeeting, onJoinMeeting }: WelcomeScreenP
 
           <p className="max-w-xl text-base leading-relaxed text-slate-300">
             PhilDEV Visio réunit vos échanges clients et le suivi de votre stagiaire dans un espace
-            unique, sans installation et sans création de compte pour les invités. Vos données
-            audio et vidéo restent sur votre appareil.
+            unique, sans installation et sans création de compte pour les invités. Les échanges
+            audio et vidéo passent par Cloudflare RealtimeKit.
           </p>
 
           <dl className="mt-2 grid gap-4 sm:grid-cols-3">
             {CAPABILITIES.map(({ icon: Icon, title, description }) => (
-              <div
-                key={title}
-                className="surface-panel flex flex-col gap-2 rounded-2xl p-4"
-              >
+              <div key={title} className="surface-panel flex flex-col gap-2 rounded-2xl p-4">
                 <Icon aria-hidden="true" className="size-5 text-accent-300" />
                 <dt className="text-sm font-semibold text-white">{title}</dt>
                 <dd className="text-xs leading-relaxed text-slate-400">{description}</dd>
@@ -105,13 +158,30 @@ export function WelcomeScreen({ onCreateMeeting, onJoinMeeting }: WelcomeScreenP
               Démarrer
             </h2>
             <p className="text-sm text-slate-400">
-              Créez un rendez-vous ou rejoignez une réunion existante.
+              Créez un rendez-vous, ou rejoignez une réunion avec le lien reçu.
             </p>
           </div>
 
-          <Button size="lg" onClick={onCreateMeeting} className="w-full">
-            <Video aria-hidden="true" className="size-5" />
-            Créer une réunion
+          {apiAvailable === false ? (
+            <Notice tone="warning" title="Service de réunion injoignable">
+              L’API de réunion répond uniquement depuis la prévisualisation déployée. Ouverte en
+              développement local, cette page ne peut ni créer ni rejoindre de réunion.
+            </Notice>
+          ) : null}
+
+          {createError ? (
+            <Notice tone="danger" title="Création impossible">
+              {createError}
+            </Notice>
+          ) : null}
+
+          <Button size="lg" onClick={handleCreate} disabled={busy} className="w-full">
+            {busy ? (
+              <Loader2 aria-hidden="true" className="size-5 animate-spin" />
+            ) : (
+              <Video aria-hidden="true" className="size-5" />
+            )}
+            {hostReady ? 'Créer une réunion' : 'Créer une réunion (organisateur)'}
           </Button>
 
           <div className="flex items-center gap-3 text-xs text-slate-500">
@@ -128,13 +198,13 @@ export function WelcomeScreen({ onCreateMeeting, onJoinMeeting }: WelcomeScreenP
             }}
           >
             <TextField
-              label="Lien ou identifiant de réunion"
-              placeholder="rdv-aurore"
+              label="Lien d’invitation"
+              placeholder="https://…/rdv-aurore?r=…"
               value={value}
               error={error}
               autoComplete="off"
               spellCheck={false}
-              hint="Collez un lien complet (https://…/rdv-aurore) ou saisissez l'identifiant."
+              hint="Collez le lien complet reçu de l'organisateur."
               onChange={(event) => {
                 setValue(event.target.value)
                 if (error) setError(null)
@@ -148,23 +218,26 @@ export function WelcomeScreen({ onCreateMeeting, onJoinMeeting }: WelcomeScreenP
             </Button>
           </form>
 
-          <Notice
-            tone="warning"
-            title="Réunions locales en Phase 1"
-            className="text-xs"
-          >
-            <WifiOff aria-hidden="true" className="mr-1.5 inline size-3.5 align-[-2px]" />
-            {PHASE_2.meetingLinks}
+          <Notice tone="info" title="Invités" className="text-xs">
+            <UserRound aria-hidden="true" className="mr-1.5 inline size-3.5 align-[-2px]" />
+            {NOTICES.inviteLink}
           </Notice>
         </section>
       </main>
 
       <footer className="mx-auto w-full max-w-6xl px-5 pb-8 text-xs text-slate-500 sm:px-8">
-        <p>
-          PhilDEV Visio · cible de déploiement&nbsp;: visio.phildev.online — Phase 1, réunions
-          locales uniquement.
-        </p>
+        <p>PhilDEV Visio · Cloudflare RealtimeKit — cible : visio.phildev.online</p>
       </footer>
+
+      <HostAccessDialog
+        key={hostDialogOpen ? 'open' : 'closed'}
+        open={hostDialogOpen}
+        onClose={() => setHostDialogOpen(false)}
+        onSuccess={() => {
+          setHostReady(true)
+          setHostDialogOpen(false)
+        }}
+      />
     </div>
   )
 }

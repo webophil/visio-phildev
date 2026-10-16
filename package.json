@@ -9,9 +9,12 @@
     "typecheck": "tsc -b",
     "lint": "oxlint",
     "test:smoke": "vite build --ssr scripts/smoke-render.tsx --outDir .smoke-out --emptyOutDir --logLevel warn && node .smoke-out/smoke-render.js",
+    "test:worker": "node scripts/worker-tests.mjs",
     "preview": "vite preview"
   },
   "dependencies": {
+    "@cloudflare/realtimekit": "^2.0.3",
+    "@cloudflare/realtimekit-react": "^2.0.3",
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.56.0",
     "react": "^19.2.8",
