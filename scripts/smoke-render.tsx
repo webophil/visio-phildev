@@ -1,7 +1,12 @@
+import type RTKClient from '@cloudflare/realtimekit'
+import type { RTKParticipant } from '@cloudflare/realtimekit'
+import { RealtimeKitContext } from '@cloudflare/realtimekit-react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import { RemoteAudioSinks } from '../src/components/meeting/RemoteAudio'
 import { UnknownRouteScreen } from '../src/components/screens/UnknownRouteScreen'
 import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
+import { remoteAudioTracks } from '../src/media/remoteAudio'
 import { createMeetingId, generateUuid, isRealtimeKitId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
 import { mediaFailure } from '../src/lib/mediaErrors'
 import { MeetingApiError } from '../src/meeting/rtkApi'
@@ -14,6 +19,10 @@ const checks: { name: string; run: () => void }[] = []
 function expect(condition: boolean, label: string) {
   if (!condition) throw new Error(`ÉCHEC : ${label}`)
   console.log(`  ok  ${label}`)
+}
+
+function countOf(haystack: string, needle: string): number {
+  return haystack.split(needle).length - 1
 }
 
 const UUID = '497f6eca-6276-4993-bfeb-53cbbbba6f08'
@@ -185,6 +194,105 @@ checks.push({
       'API média absente : aucune relance proposée',
     )
     expect(mediaFailure('no-device').title.includes('Aucun périphérique'), 'matériel absent expliqué')
+  },
+})
+
+// --- Audio des participants distants -------------------------------------
+checks.push({
+  name: 'audio distant',
+  run: () => {
+    const track = (id: string) => ({ id }) as MediaStreamTrack
+
+    const speaking = remoteAudioTracks({ audioEnabled: true, audioTrack: track('voix-a') })
+    expect(
+      speaking.length === 1 && speaking[0].id === 'voix-a',
+      'micro actif → une piste restituée',
+    )
+
+    const muted = remoteAudioTracks({ audioEnabled: false, audioTrack: track('voix-b') })
+    expect(muted.length === 0, 'micro coupé → aucune piste restituée')
+
+    const noTrackYet = remoteAudioTracks({ audioEnabled: true, audioTrack: null })
+    expect(noTrackYet.length === 0, 'piste pas encore reçue → rien à restituer')
+
+    const sharing = remoteAudioTracks({
+      audioEnabled: true,
+      audioTrack: track('voix-c'),
+      screenShareEnabled: true,
+      screenShareTracks: { audio: track('son-partage') },
+    })
+    expect(
+      sharing.length === 2 && sharing.some((item) => item.id === 'son-partage'),
+      'son du partage d’écran ajouté à la voix',
+    )
+
+    const duplicated = remoteAudioTracks({
+      audioEnabled: true,
+      audioTrack: track('voix-d'),
+      screenShareEnabled: true,
+      screenShareTracks: { audio: track('voix-d') },
+    })
+    expect(duplicated.length === 1, 'une même piste n’est jamais restituée deux fois')
+
+    const sharingMuted = remoteAudioTracks({
+      audioEnabled: false,
+      audioTrack: track('voix-e'),
+      screenShareEnabled: true,
+      screenShareTracks: { audio: track('son-partage-2') },
+    })
+    expect(
+      sharingMuted.length === 1 && sharingMuted[0].id === 'son-partage-2',
+      'partage sonore audible malgré un micro coupé',
+    )
+
+    const noShareAudio = remoteAudioTracks({
+      audioEnabled: true,
+      audioTrack: track('voix-f'),
+      screenShareEnabled: true,
+      screenShareTracks: null,
+    })
+    expect(noShareAudio.length === 1, 'partage sans son → voix seule')
+  },
+})
+
+// --- Sortie audio montée dans la salle -----------------------------------
+checks.push({
+  name: 'sortie audio des participants',
+  run: () => {
+    const guest = (id: string) =>
+      ({
+        id,
+        name: id,
+        isHost: false,
+        audioEnabled: true,
+        videoEnabled: false,
+        screenShareEnabled: false,
+      }) as unknown as RTKParticipant
+
+    const withParticipants = (participants: RTKParticipant[]) =>
+      ({
+        participants: { joined: { toArray: () => participants } },
+      }) as unknown as RTKClient
+
+    const render = (participants: RTKParticipant[]) =>
+      renderToStaticMarkup(
+        <RealtimeKitContext.Provider
+          value={{ meeting: withParticipants(participants), updates: undefined }}
+        >
+          <RemoteAudioSinks />
+        </RealtimeKitContext.Provider>,
+      )
+
+    const twoGuests = render([guest('invite-1'), guest('invite-2')])
+    expect(countOf(twoGuests, '<audio') === 2, 'un élément de lecture par participant distant')
+    // React émet `autoPlay` en SSR ; la casse n'a pas d'importance, seule la
+    // présence de la demande de lecture compte.
+    expect(/autoplay/i.test(twoGuests), 'lecture automatique demandée sur chaque sortie')
+    expect(!twoGuests.includes('muted'), 'aucune sortie distante n’est coupée')
+    expect(!twoGuests.includes('Activer le son'), 'aucun avertissement sans blocage constaté')
+
+    const alone = render([])
+    expect(countOf(alone, '<audio') === 0, 'personne à écouter → aucune sortie')
   },
 })
 

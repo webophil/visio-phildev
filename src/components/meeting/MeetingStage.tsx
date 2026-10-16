@@ -1,6 +1,6 @@
 import type { RTKParticipant } from '@cloudflare/realtimekit'
 import { useRealtimeKitMeeting, useRealtimeKitSelector } from '@cloudflare/realtimekit-react'
-import { MicOff, MonitorOff, MonitorUp, Radio } from 'lucide-react'
+import { MicOff, MonitorOff, MonitorUp, Radio, Volume1 } from 'lucide-react'
 
 import { Button } from '../ui/Button'
 import { RemoteScreenShare, RtkParticipantVideo, RtkSelfVideo, SelfScreenShareView } from './RtkVideoSurface'
@@ -169,7 +169,14 @@ function RemoteTile({ participant, compact = false }: { participant: RTKParticip
           />
         }
       />
-      <TileFooter name={participant.name} audioEnabled={participant.audioEnabled} isHost={participant.isHost} />
+      <TileFooter
+        name={participant.name}
+        audioEnabled={participant.audioEnabled}
+        // Voix attendue mais piste pas encore reçue : l'état affiché reste
+        // celui du média réellement reçu, jamais une intention supposée.
+        audioTrackReceived={Boolean(participant.audioTrack)}
+        isHost={participant.isHost}
+      />
     </div>
   )
 }
@@ -177,11 +184,19 @@ function RemoteTile({ participant, compact = false }: { participant: RTKParticip
 interface TileFooterProps {
   name: string
   audioEnabled: boolean
+  /** Une piste audio distante est-elle réellement reçue ? (micro local : sans objet) */
+  audioTrackReceived?: boolean
   isHost?: boolean
   isLocal?: boolean
 }
 
-function TileFooter({ name, audioEnabled, isHost = false, isLocal = false }: TileFooterProps) {
+function TileFooter({
+  name,
+  audioEnabled,
+  audioTrackReceived = true,
+  isHost = false,
+  isLocal = false,
+}: TileFooterProps) {
   return (
     <div className="pointer-events-none absolute inset-x-0 bottom-0 flex items-center justify-between gap-2 bg-linear-to-t from-ink-950/85 to-transparent px-3 pt-8 pb-2">
       <span className="flex min-w-0 items-center gap-2 text-xs font-medium text-white">
@@ -198,6 +213,11 @@ function TileFooter({ name, audioEnabled, isHost = false, isLocal = false }: Til
 
       {!audioEnabled ? (
         <MicOff aria-label="Micro coupé" className="size-3.5 shrink-0 text-rose-300" />
+      ) : !audioTrackReceived ? (
+        <Volume1
+          aria-label="Voix en cours de réception"
+          className="size-3.5 shrink-0 animate-pulse text-amber-300"
+        />
       ) : null}
     </div>
   )

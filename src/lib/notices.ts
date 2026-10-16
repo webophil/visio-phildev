@@ -15,6 +15,10 @@ export const NOTICES = {
   capacity:
     "Une réunion accueille cinq personnes au maximum, organisateur compris. Le contrôle est effectué côté serveur, au moment où un participant rejoint.",
 
+  /** Audio */
+  audioPlayback:
+    "Cliquez dans la page (ou sur le bouton) pour autoriser la lecture du son : votre navigateur ne l'a pas lancée de lui-même.",
+
   /** Partage d'écran */
   screenShareNote:
     "Votre écran est transmis à tous les participants. Votre caméra reste visible en vignette pendant le partage.",

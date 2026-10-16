@@ -44,6 +44,8 @@ Navigateur ──► Worker FreeBuff (/api/...)  ──► API Cloudflare Realti
 | `worker/rateLimit.js` | Limitation de débit en mémoire (fenêtre glissante) |
 | `src/meeting/transport/RealtimeKitTransport.ts` | Seule frontière avec le SDK côté navigateur |
 | `src/media/useRtkMedia.ts` | Capture des périphériques par le SDK (écran de préparation) |
+| `src/media/remoteAudio.ts` | Sélection des pistes audio distantes à restituer (pure, testée) |
+| `src/components/meeting/RemoteAudio.tsx` | Sortie audio des participants distants (un `<audio>` par participant) |
 | `src/meeting/rtkApi.ts` | Appels typés à l'API du Worker |
 | `src/meeting/hostSession.ts` | Session organisateur et identifiant d'invité, côté navigateur |
 | `src/meeting/useCreateMeeting.ts` | Création d'une réunion puis ouverture de la salle |
@@ -51,6 +53,26 @@ Navigateur ──► Worker FreeBuff (/api/...)  ──► API Cloudflare Realti
 Le SDK est la **source de vérité** des états audio/vidéo : les composants consomment
 l'instantané produit par le transport (`MeetingSessionState`), jamais une intention locale. Aucune
 capture `getUserMedia` parallèle n'est ouverte à côté de celle du SDK.
+
+### Audio des participants distants
+
+Le SDK rattache lui-même la **vidéo** aux éléments d'affichage (`participant.registerVideoElement`),
+mais il ne fournit **aucune** sortie pour l'**audio** : sa lecture interne n'existe que derrière
+l'option expérimentale `modules.experimentalAudioPlayback`, désactivée par défaut, et l'UI Kit
+(`RtkParticipantsAudio`) n'est pas utilisé ici puisque l'interface est personnalisée. Sans élément
+de lecture explicitement alimenté, une voix est donc reçue puis restituée nulle part.
+
+`RemoteAudioSinks` monte un élément `<audio>` par participant distant et lui affecte un `MediaStream`
+construit à partir de `participant.audioTrack` (et, le cas échéant, du son du partage d'écran),
+conformément à l'exemple officiel livré avec le paquet. Deux règles tenues :
+
+- **un seul élément par participant**, monté une fois pour la salle (jamais dans les vignettes, qui
+  se démontent au changement de disposition) — aucune voix n'est jouée en double, et le son ne
+dépend pas de l'affichage ;
+- **aucune piste dupliquée** : `remoteAudioTracks()` dédoublonne par identifiant de piste.
+
+Si le navigateur refuse la lecture automatique (`NotAllowedError`), un message explicite propose
+« Activer le son » et la reprise est tentée dès le premier clic ou la première touche.
 
 ## Secrets et identifiants
 

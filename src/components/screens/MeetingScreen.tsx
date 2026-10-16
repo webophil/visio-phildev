@@ -17,6 +17,7 @@ import { ControlBar } from '../meeting/ControlBar'
 import { InviteLinkButton } from '../meeting/InviteLinkButton'
 import { MeetingStage } from '../meeting/MeetingStage'
 import { ParticipantsPanel } from '../meeting/ParticipantsPanel'
+import { RemoteAudioSinks } from '../meeting/RemoteAudio'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { StatusPill } from '../ui/StatusPill'
@@ -122,6 +123,9 @@ function MeetingLayout() {
 
       <main className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4 lg:flex-row">
         <div className="flex min-h-0 flex-1 flex-col gap-3">
+          {/* Sortie audio des voix distantes : montée ici, donc indépendante de
+              la disposition affichée par la scène. */}
+          <RemoteAudioSinks />
           <MeetingStage />
           <ControlBar />
         </div>
