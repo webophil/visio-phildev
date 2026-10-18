@@ -1,10 +1,18 @@
 import { useCallback, useState } from 'react'
 
-import { MEETING_LINK_PARAM, createMeetingId, meetingDisplayName } from '../lib/ids'
+import { MEETING_LINK_PARAM, createMeetingId } from '../lib/ids'
 import { meetingPath } from '../lib/format'
+import { normalizeMeetingTitle } from '../lib/meetingTitle'
 import { navigate } from '../lib/router'
 import { readHostSession } from './hostSession'
 import { MeetingApiError, createMeeting } from './rtkApi'
+
+export interface CreateMeetingOptions {
+  displayName?: string
+  meetingId?: string
+  /** Nom de la réunion saisi par l'organisateur (facultatif). */
+  title?: string
+}
 
 export interface CreateMeetingController {
   busy: boolean
@@ -14,7 +22,7 @@ export interface CreateMeetingController {
    * Renvoie `false` lorsque la création a échoué ; le message est alors exposé
    * par `error`.
    */
-  start: (options?: { displayName?: string; meetingId?: string }) => Promise<boolean>
+  start: (options?: CreateMeetingOptions) => Promise<boolean>
   clearError: () => void
 }
 
@@ -22,15 +30,16 @@ export interface CreateMeetingController {
  * Création d'une réunion.
  *
  * L'identifiant lisible (`rdv-xxxxxxx`) est choisi localement et sert de nom au
- * rendez-vous ; la réunion Cloudflare, elle, est créée côté serveur et son
- * identifiant est transporté par le lien (`?r=`). Créer une réunion exige une
- * session organisateur valide : l'API refuse toute autre demande.
+ * rendez-vous ; la réunion Cloudflare, elle, est créée côté serveur avec le nom
+ * saisi par l'organisateur (stocké dans le titre RealtimeKit) et son identifiant
+ * est transporté par le lien (`?r=`). Créer une réunion exige une session
+ * organisateur valide : l'API refuse toute autre demande.
  */
 export function useCreateMeeting(): CreateMeetingController {
   const [busy, setBusy] = useState(false)
   const [error, setError] = useState<string | null>(null)
 
-  const start = useCallback(async (options?: { displayName?: string; meetingId?: string }) => {
+  const start = useCallback(async (options?: CreateMeetingOptions) => {
     const session = readHostSession()
 
     if (!session) {
@@ -47,7 +56,7 @@ export function useCreateMeeting(): CreateMeetingController {
       const meetingId = options?.meetingId ?? createMeetingId()
       const displayName = options?.displayName?.trim() || 'Organisateur'
       const created = await createMeeting({
-        title: meetingDisplayName(meetingId),
+        title: normalizeMeetingTitle(options?.title),
         displayName,
         hostToken: session.token,
       })

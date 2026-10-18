@@ -26,6 +26,12 @@ export interface CreatedMeeting {
   maxParticipants: number
 }
 
+/** Nom d'une réunion existante (titre Cloudflare, lisible par les participants). */
+export interface MeetingInfo {
+  meetingId: string
+  title: string
+}
+
 export interface HostSession {
   token: string
   expiresAt: number
@@ -161,6 +167,15 @@ export function createMeeting(options: {
     hostToken: options.hostToken,
     body: { title: options.title, displayName: options.displayName },
   })
+}
+
+/**
+ * Nom d'une réunion existante.
+ * Le titre est stocké côté Cloudflare RealtimeKit : il est donc identique pour
+ * tous les participants, sans base de données ni paramètre dans le lien.
+ */
+export function fetchMeetingInfo(meetingId: string): Promise<MeetingInfo> {
+  return callApi<MeetingInfo>(`/api/meetings/${encodeURIComponent(meetingId)}`, { method: 'GET' })
 }
 
 /** Demande un jeton de participation (invité avec lien, ou organisateur). */

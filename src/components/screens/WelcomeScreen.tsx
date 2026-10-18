@@ -19,6 +19,7 @@ import { StatusPill } from '../ui/StatusPill'
 import { TextField } from '../ui/TextField'
 import { parseMeetingLink } from '../../lib/format'
 import type { MeetingLink } from '../../lib/format'
+import { DEFAULT_MEETING_TITLE, MAX_MEETING_TITLE_LENGTH } from '../../lib/meetingTitle'
 import { NOTICES } from '../../lib/notices'
 import { readHostSession } from '../../meeting/hostSession'
 import { checkApiAvailability } from '../../meeting/rtkApi'
@@ -56,6 +57,8 @@ export interface WelcomeScreenProps {
  */
 export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
   const [value, setValue] = useState('')
+  // Nom de la réunion : pré-rempli, modifiable, jamais obligatoire.
+  const [title, setTitle] = useState(DEFAULT_MEETING_TITLE)
   const [error, setError] = useState<string | null>(null)
   const [hostDialogOpen, setHostDialogOpen] = useState(false)
   const [hostReady, setHostReady] = useState(() => readHostSession() !== null)
@@ -79,7 +82,7 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
       setHostDialogOpen(true)
       return
     }
-    void start()
+    void start({ title })
   }
 
   const handleJoin = () => {
@@ -174,6 +177,21 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
               {createError}
             </Notice>
           ) : null}
+
+          <TextField
+            label="Nom de la réunion"
+            placeholder={DEFAULT_MEETING_TITLE}
+            value={title}
+            maxLength={MAX_MEETING_TITLE_LENGTH}
+            autoComplete="off"
+            hint={`Affiché à tous les participants. Laissez vide pour « ${DEFAULT_MEETING_TITLE} ».`}
+            onChange={(event) => setTitle(event.target.value)}
+            onBlur={() => {
+              // Un champ vide revient au nom par défaut : le nom transmis reste
+              // toujours lisible.
+              if (title.trim().length === 0) setTitle(DEFAULT_MEETING_TITLE)
+            }}
+          />
 
           <Button size="lg" onClick={handleCreate} disabled={busy} className="w-full">
             {busy ? (
