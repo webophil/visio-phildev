@@ -3,7 +3,17 @@ import type { RTKParticipant } from '@cloudflare/realtimekit'
 import { RealtimeKitContext } from '@cloudflare/realtimekit-react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import { ChatPanel } from '../src/components/meeting/ChatPanel'
 import { RemoteAudioSinks } from '../src/components/meeting/RemoteAudio'
+import {
+  COMPACT_TILE_CLASS,
+  SIDE_PANEL_CLASS,
+  VIDEO_TILE_CLASS,
+  stageColumns,
+  stageGridClass,
+} from '../src/components/meeting/layout'
+import { MeetingContext } from '../src/state/meetingContext'
+import type { MeetingContextValue } from '../src/state/meetingContext'
 import { UnknownRouteScreen } from '../src/components/screens/UnknownRouteScreen'
 import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
 import { remoteAudioTracks } from '../src/media/remoteAudio'
@@ -239,8 +249,11 @@ checks.push({
       }
     }
 
-    const coverage = applyPersonMask(mask)
-    expect(Math.abs(coverage - 0.25) < 0.001, 'couverture = 25 % de l’image')
+    const stats = applyPersonMask(mask)
+    expect(Math.abs(stats.coverage - 0.25) < 0.001, 'couverture = 25 % de l’image')
+    // Diagnostic de format : 25 % de pixels à 255 ⇒ moyenne brute de 64.
+    expect(stats.redMean === 64, 'moyenne du rouge exposée (64)')
+    expect(stats.alphaMean === 64, 'moyenne de l’alpha exposée (64)')
 
     const alphaAt = (x: number, y: number) => mask[(y * size + x) * 4 + 3]
     expect(alphaAt(4, 4) === 255, 'centre → premier plan opaque')
@@ -296,6 +309,8 @@ checks.push({
       stats: () => ({
         imagesReceived: 3,
         personCoverage: 0.4,
+        maskRedMean: 64,
+        maskAlphaMean: 64,
         imagesBlurred: 3,
         masks: 2,
         imagesPerSecond: 20,
@@ -330,6 +345,78 @@ checks.push({
     await applyVideoEffect(working.media, 'none')
     expect(readVideoEffectStats() === null, '« Aucun effet » libère le traitement')
     expect(working.removals() === 1, 'middleware retiré explicitement')
+  },
+})
+
+// --- Mise en page de la réunion ------------------------------------------
+checks.push({
+  name: 'mise en page',
+  run: () => {
+    expect(stageColumns(1) === 1, '1 vignette → 1 colonne')
+    expect(stageColumns(2) === 2 && stageColumns(4) === 2, '2 à 4 vignettes → 2 colonnes')
+    expect(stageColumns(5) === 3, '5 vignettes → 3 colonnes sur grand écran')
+
+    const grid = stageGridClass(2)
+    expect(grid.includes('auto-rows-fr'), 'lignes de hauteur égale')
+    expect(grid.includes('min-h-0') && grid.includes('min-w-0'), 'la scène ne dicte pas sa taille')
+    expect(grid.includes('overflow-hidden'), 'aucun débordement de la scène')
+    expect(!grid.includes('min-h-40'), 'aucune hauteur minimale fixe sur la scène')
+    expect(stageGridClass(5).includes('lg:grid-cols-3'), '5 participants → 3 colonnes')
+
+    // Vignettes : dimensions issues de la grille uniquement.
+    expect(VIDEO_TILE_CLASS.includes('min-h-0'), 'vignette sans hauteur imposée')
+    expect(VIDEO_TILE_CLASS.includes('min-w-0'), 'vignette sans largeur imposée')
+    expect(!VIDEO_TILE_CLASS.includes('min-h-40'), 'plus de hauteur minimale sur la vignette')
+    expect(COMPACT_TILE_CLASS.includes('aspect-video'), 'vignette compacte en 16:9')
+
+    // Panneau : largeur fixe, non compressible et non extensible.
+    expect(SIDE_PANEL_CLASS.includes('lg:w-[22rem]'), 'largeur fixe sur ordinateur')
+    expect(
+      SIDE_PANEL_CLASS.includes('lg:min-w-[22rem]') && SIDE_PANEL_CLASS.includes('lg:max-w-[22rem]'),
+      'largeur non compressible par un message long',
+    )
+    expect(SIDE_PANEL_CLASS.includes('min-w-0'), 'le contenu ne peut pas élargir le panneau')
+    expect(SIDE_PANEL_CLASS.includes('overflow-hidden'), 'panneau borné, défilement interne')
+
+    // Rendu réel du panneau de chat avec un message d'un seul « mot » très long.
+    const longWord = 'x'.repeat(600)
+    const context = {
+      closePanel: () => {},
+      chat: {
+        available: true,
+        canSend: true,
+        sending: false,
+        error: null,
+        unavailableReason: null,
+        maxTextLength: 1000,
+        messages: [
+          {
+            id: 'm1',
+            text: longWord,
+            authorName: 'Aurore',
+            isLocal: false,
+            sentAt: Date.now(),
+          },
+        ],
+      },
+      sendChatMessage: async () => true,
+    } as unknown as MeetingContextValue
+
+    const html = renderToStaticMarkup(
+      <MeetingContext.Provider value={context}>
+        <ChatPanel />
+      </MeetingContext.Provider>,
+    )
+
+    expect(html.includes('lg:w-[22rem]'), 'panneau rendu à largeur fixe')
+    expect(html.includes('overflow-wrap:anywhere'), 'mot très long renvoyé à la ligne')
+    expect(html.includes('break-words'), 'césure autorisée dans les bulles')
+    expect(html.includes('min-w-0'), 'bulles et en-têtes compressibles')
+    expect(
+      /aria-label="Messages de la réunion"[^>]*overflow-y-auto/.test(html),
+      'la liste des messages défile dans le panneau',
+    )
+    expect(html.includes(longWord), 'message long rendu intégralement')
   },
 })
 

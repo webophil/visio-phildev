@@ -106,6 +106,24 @@ direct (`chatUpdate`) ;
   n'autorise pas l'écrit, le panneau le dit et la saisie reste désactivée ;
 - aucune persistance : l'application ne stocke aucun message et n'en relit aucun après la réunion.
 
+## Mise en page de la salle
+
+La scène vidéo et le panneau latéral sont **indépendants en taille** :
+
+- l'écran de réunion est borné au viewport (`h-dvh` + `overflow-hidden`) : la scène reçoit la
+  hauteur restante, elle ne grandit jamais avec le contenu d'un panneau ;
+- le panneau a une largeur **fixe** sur ordinateur (`22rem`, `min-w` = `max-w`) et `shrink-0` ;
+  c'est sa zone de contenu qui défile (`min-h-0` + `overflow-y-auto`) ;
+- les bulles de chat passent à la ligne même sur un « mot » de 600 caractères
+  (`overflow-wrap: anywhere`) ;
+- les vignettes n'ont **aucune hauteur minimale** : `min-h-0`/`min-w-0` + `auto-rows-fr`, et la
+  vidéo est en `object-cover`, donc jamais déformée ;
+- 1 vignette → 1 colonne, 2 à 4 → 2 colonnes, 5 et plus → 3 colonnes sur grand écran.
+
+Ces règles vivent dans `src/components/meeting/layout.ts` et sont vérifiées par
+`npm run test:smoke` (groupe « mise en page »), y compris le rendu réel du panneau de chat avec un
+message très long.
+
 ## Flou d'arrière-plan
 
 Le SDK installé (2.0.3) **ne fournit aucun effet de flou natif** : il expose en revanche
@@ -269,6 +287,8 @@ main, depuis l'adresse de prévisualisation.
 | 7. Effets : « Flou » sur un PC | Le panneau affiche des compteurs non nuls (≈ 20 images/s reçues, ≈ 14 détourages/s) et une silhouette détectée entre 10 % et 70 % ; **visage et silhouette parfaitement nets**, arrière-plan flou **chez vous et chez l'autre participant** ; le retour à « Aucun effet » rétablit l'image d'origine |
 | 8. Effets sur un navigateur WebKit ancien ou sans WebAssembly SIMD | Message d'échec explicite, caméra normale conservée, aucun écran noir |
 | 9. En pleine réunion, basculer « Aucun effet » → « Flou » → « Aucun effet » | Le changement s'applique en une à deux secondes, sans couper la voix ; les compteurs repartent à chaque activation, l'image d'origine revient au retrait |
+| 10. Ouvrir « Participants », « Chat » puis « Effets » ; envoyer un message de 500 caractères sans espace | La taille des vidéos ne change pas, le panneau défile seul, le message passe à la ligne ; à 2, 3, 4 puis 5 participants la grille reste équilibrée et les images ne sont pas déformées |
+| 11. Partager l'écran pendant qu'un panneau est ouvert | L'écran garde son ratio (`object-contain`), l'incrustation webcam reste en 16:9 dans le coin |
 
 Si le chat reste indisponible alors que le panneau est ouvert, vérifier dans le tableau de bord
 Cloudflare RealtimeKit que le preset utilisé (`group_call_host`, `group_call_participant`) autorise

@@ -3,6 +3,7 @@ import { useRealtimeKitMeeting, useRealtimeKitSelector } from '@cloudflare/realt
 import { MicOff, MonitorOff, MonitorUp, Radio, Volume1 } from 'lucide-react'
 
 import { Button } from '../ui/Button'
+import { COMPACT_TILE_CLASS, VIDEO_TILE_CLASS, stageGridClass } from './layout'
 import { RemoteScreenShare, RtkParticipantVideo, RtkSelfVideo, SelfScreenShareView } from './RtkVideoSurface'
 import { VideoPlaceholder } from './VideoSurface'
 import { NOTICES } from '../../lib/notices'
@@ -29,7 +30,7 @@ export function MeetingStage() {
 
   if (sharing) {
     return (
-      <div className="relative flex min-h-0 flex-1 flex-col gap-3">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
         {selfScreenSharing ? (
           <SelfScreenShareView
             self={meeting.self}
@@ -100,7 +101,7 @@ export function MeetingStage() {
   }
 
   return (
-    <div className="grid min-h-0 flex-1 auto-rows-fr gap-3 sm:grid-cols-2">
+    <div className={stageGridClass(remotes.length + 1)}>
       <SelfTile name={displayName} />
       {remotes.map((participant) => (
         <RemoteTile key={participant.id} participant={participant} />
@@ -126,12 +127,12 @@ function SelfTile({ name }: { name: string }) {
   const audioEnabled = useRealtimeKitSelector((client) => client.self.audioEnabled)
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-ink-700">
+    <div className={VIDEO_TILE_CLASS}>
       <RtkSelfVideo
         self={meeting.self}
         enabled={videoEnabled}
         label={`Votre flux vidéo (${name})`}
-        className="size-full min-h-40"
+        className="size-full"
         placeholder={
           <VideoPlaceholder
             title={name}
@@ -151,17 +152,13 @@ function SelfTile({ name }: { name: string }) {
 function RemoteTile({ participant, compact = false }: { participant: RTKParticipant; compact?: boolean }) {
   return (
     <div
-      className={
-        compact
-          ? 'relative w-40 shrink-0 overflow-hidden rounded-xl border border-ink-700'
-          : 'relative overflow-hidden rounded-2xl border border-ink-700'
-      }
+      className={compact ? COMPACT_TILE_CLASS : VIDEO_TILE_CLASS}
     >
       <RtkParticipantVideo
         participant={participant}
         enabled={participant.videoEnabled}
         label={`Flux vidéo de ${participant.name}`}
-        className={compact ? 'aspect-video' : 'size-full min-h-40'}
+        className="size-full"
         placeholder={
           <VideoPlaceholder
             title={participant.name}

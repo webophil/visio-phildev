@@ -141,13 +141,15 @@ function ChatBubble({ message }: { message: ChatMessageView }) {
   return (
     <article
       className={[
-        'flex max-w-[92%] flex-col gap-0.5 rounded-xl px-3 py-2',
+        // `min-w-0` : sans lui, un mot très long élargit la bulle, puis le
+        // panneau, puis comprime la scène vidéo.
+        'flex min-w-0 max-w-[92%] flex-col gap-0.5 rounded-xl px-3 py-2',
         message.isLocal
           ? 'self-end border border-accent-500/40 bg-accent-500/10'
           : 'self-start border border-ink-600 bg-ink-850',
       ].join(' ')}
     >
-      <header className="flex items-baseline gap-2">
+      <header className="flex min-w-0 items-baseline gap-2">
         <span className="truncate text-xs font-semibold text-white">
           {message.isLocal ? 'Vous' : message.authorName}
         </span>
@@ -158,7 +160,7 @@ function ChatBubble({ message }: { message: ChatMessageView }) {
           {formatClockTime(message.sentAt)}
         </time>
       </header>
-      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap text-slate-100">
+      <p className="text-sm leading-relaxed break-words whitespace-pre-wrap [overflow-wrap:anywhere] text-slate-100">
         {message.text}
       </p>
     </article>

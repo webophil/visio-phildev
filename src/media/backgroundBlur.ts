@@ -120,18 +120,39 @@ export function maskOpacity(maskValue: number): number {
 }
 
 /**
+ * Mesures d'un masque, sans aucune donnée d'image conservée.
+ *
+ * `redMean` et `alphaMean` sont les moyennes **brutes** des deux canaux que
+ * MediaPipe utilise : elles permettent d'identifier sans ambiguïté le format
+ * renvoyé par la version installée (rouge = alpha, alpha seul, ou alpha aplati
+ * à 255).
+ */
+export interface MaskStats {
+  /** Fraction de l'image occupée par la silhouette (0–1). */
+  coverage: number
+  /** Moyenne du canal rouge du masque brut (0–255). */
+  redMean: number
+  /** Moyenne du canal alpha du masque brut (0–255). */
+  alphaMean: number
+}
+
+/**
  * Transforme un masque RGBA (`[m, 0, 0, m]`) en masque d'opacité utilisable par
  * `destination-in` : RGB blanc, alpha = opacité du premier plan.
- *
- * Renvoie la couverture : fraction de l'image occupée par la silhouette.
- * Aucune donnée d'image n'est conservée ni transmise, seul ce ratio est exposé.
  */
-export function applyPersonMask(data: Uint8ClampedArray): number {
+export function applyPersonMask(data: Uint8ClampedArray): MaskStats {
   let personPixels = 0
+  let redTotal = 0
+  let alphaTotal = 0
 
   for (let index = 0; index < data.length; index += 4) {
-    const value = maskValueForPixel(data[index], data[index + 3])
-    const opacity = maskOpacity(value)
+    const red = data[index]
+    const alpha = data[index + 3]
+
+    redTotal += red
+    alphaTotal += alpha
+
+    const opacity = maskOpacity(maskValueForPixel(red, alpha))
     data[index] = 255
     data[index + 1] = 255
     data[index + 2] = 255
@@ -140,7 +161,13 @@ export function applyPersonMask(data: Uint8ClampedArray): number {
   }
 
   const total = data.length / 4
-  return total === 0 ? 0 : personPixels / total
+  if (total === 0) return { coverage: 0, redMean: 0, alphaMean: 0 }
+
+  return {
+    coverage: personPixels / total,
+    redMean: Math.round(redTotal / total),
+    alphaMean: Math.round(alphaTotal / total),
+  }
 }
 
 /**
@@ -191,6 +218,10 @@ export interface VideoEffectStats {
   imagesReceived: number
   /** Fraction de l'image occupée par la silhouette détectée (0–1). */
   personCoverage: number
+  /** Moyenne du canal rouge du masque brut : identifie le format du masque. */
+  maskRedMean: number
+  /** Moyenne du canal alpha du masque brut : identifie le format du masque. */
+  maskAlphaMean: number
   /** Images effectivement recomposées (fond flouté). */
   imagesBlurred: number
   /** Masques de détourage reçus du moteur. */
@@ -305,6 +336,8 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
   let masksInWindow = 0
   let failures = 0
   let personCoverage = 0
+  let maskRedMean = 0
+  let maskAlphaMean = 0
 
   /** Résolution de la vérification initiale du moteur. */
   let resolveWarmup: ((ok: boolean) => void) | null = null
@@ -325,6 +358,8 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     stats: () => ({
       imagesReceived,
       personCoverage,
+      maskRedMean,
+      maskAlphaMean,
       imagesBlurred,
       masks,
       imagesPerSecond,
@@ -367,7 +402,10 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     // équivalents. `applyPersonMask` produit un vrai masque d'opacité (RGB
     // blanc, alpha = premier plan) et renvoie la couverture détectée.
     const image = maskCtx.getImageData(0, 0, mask.width, mask.height)
-    personCoverage = applyPersonMask(image.data)
+    const maskStats = applyPersonMask(image.data)
+    personCoverage = maskStats.coverage
+    maskRedMean = maskStats.redMean
+    maskAlphaMean = maskStats.alphaMean
     maskCtx.putImageData(image, 0, 0)
     maskReady = true
     masks += 1
