@@ -174,6 +174,10 @@ function BlurDiagnostics() {
         <dd className="text-right font-mono tabular-nums text-slate-200">
           {stats ? stats.imagesBlurred : '…'}
         </dd>
+        <dt>Silhouette détectée</dt>
+        <dd className="text-right font-mono tabular-nums text-slate-200">
+          {stats ? `${Math.round(stats.personCoverage * 100)} %` : '…'}
+        </dd>
       </dl>
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
         Ces compteurs ne contiennent aucune image : ils confirment seulement que le fond est

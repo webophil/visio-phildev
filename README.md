@@ -119,6 +119,19 @@ point d'accroche qui est utilisé (`src/media/backgroundBlur.ts`) :
 3. la piste audio et le partage d'écran ne sont jamais touchés, et **aucune seconde capture** de la
    caméra n'est ouverte : le SDK reste propriétaire de la piste.
 
+### Lecture du masque — cause d'un défaut corrigé
+
+MediaPipe n'encode **pas** son masque en niveaux de gris opaques : le convertisseur GPU écrit
+`vec4(m, 0, 0, m)`, c'est-à-dire la valeur du masque **dans le rouge et dans l'alpha**, vert et bleu
+à zéro. Lire la luminance des trois canaux donnait `0,299 × m` : la silhouette n'était donc
+restaurée qu'à ~30 % d'opacité, et le fond flou transparaissait à travers le visage — l'image
+entière semblait floue.
+
+`applyPersonMask` lit désormais le rouge et l'alpha (équivalents), applique une rampe douce
+(15 % → 60 %) qui rend le premier plan **totalement net** tout en gardant un contour fondu, et
+renvoie la couverture de la silhouette. Si aucune silhouette n'est détectée (< 0,5 % de l'image),
+l'image reste nette : un masque inexploitable ne peut plus produire une vidéo entièrement floue.
+
 ### Chargement du moteur — cause d'un défaut corrigé
 
 Le paquet `@mediapipe/selfie_segmentation` est un **script classique** qui publie son constructeur
@@ -140,7 +153,8 @@ visible, avant d'annoncer que l'effet est actif :
 
 Chacun de ces contrôles échoue avec un message en français, retire le middleware et laisse la
 caméra normale. Le panneau « Effets de fond » affiche en complément des compteurs (images reçues,
-images recomposées, détourages calculés par seconde) : des **nombres uniquement**, jamais une image.
+images recomposées, détourages calculés par seconde) et la **couverture de la silhouette** : des
+**nombres uniquement**, jamais une image.
 
 Choix de conception :
 
@@ -252,7 +266,7 @@ main, depuis l'adresse de prévisualisation.
 | 4. Vidéo : activer puis couper la caméra de chaque côté | Les vignettes suivent l'état réel, la voix continue de passer |
 | 5. Partage d'écran depuis un PC | L'écran occupe la scène, les caméras passent en vignettes, le son du partage est audible |
 | 6. Chat : un message depuis chaque PC | Message affiché avec auteur et heure des deux côtés ; si le preset interdit l'écrit, le panneau l'explique au lieu d'échouer |
-| 7. Effets : « Flou » sur un PC | Le panneau affiche des compteurs non nuls (≈ 20 images/s reçues, ≈ 14 détourages/s) ; votre silhouette reste nette, l'arrière-plan est flouté **chez vous et chez l'autre participant** ; le retour à « Aucun effet » rétablit l'image d'origine |
+| 7. Effets : « Flou » sur un PC | Le panneau affiche des compteurs non nuls (≈ 20 images/s reçues, ≈ 14 détourages/s) et une silhouette détectée entre 10 % et 70 % ; **visage et silhouette parfaitement nets**, arrière-plan flou **chez vous et chez l'autre participant** ; le retour à « Aucun effet » rétablit l'image d'origine |
 | 8. Effets sur un navigateur WebKit ancien ou sans WebAssembly SIMD | Message d'échec explicite, caméra normale conservée, aucun écran noir |
 | 9. En pleine réunion, basculer « Aucun effet » → « Flou » → « Aucun effet » | Le changement s'applique en une à deux secondes, sans couper la voix ; les compteurs repartent à chaque activation, l'image d'origine revient au retrait |
 

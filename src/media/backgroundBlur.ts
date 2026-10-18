@@ -50,6 +50,17 @@ const BLUR_DIVISOR = 8
 /** Rayon d'adoucissement du contour de la silhouette, en pixels. */
 const FEATHER_PX = 3
 
+/** Bornes de la rampe appliquée au masque, en fraction de 255. */
+const MASK_LOW = 0.15
+const MASK_HIGH = 0.6
+
+/**
+ * En dessous de cette couverture, aucun premier plan n'est détecté : l'image
+ * est laissée **nette** plutôt que floutée intégralement. Un masque inexploitable
+ * ne doit jamais produire une vidéo entièrement floue.
+ */
+const MIN_PERSON_COVERAGE = 0.005
+
 /**
  * Largeur maximale du calque « personne nette ».
  * Au-delà, la composition coûte plus cher que le gain de netteté apporté :
@@ -75,6 +86,61 @@ export function normalizedWorkSize(width: number, height: number): { width: numb
   const scaledHeight = Math.max(2, Math.round((height * scale) / 2) * 2)
 
   return { width: scaledWidth, height: scaledHeight }
+}
+
+/**
+ * Valeur du masque pour un pixel, telle que MediaPipe l'encode réellement.
+ *
+ * Le convertisseur GPU écrit `vec4(m, 0, 0, m)` : **rouge et alpha portent la
+ * même valeur**, vert et bleu valent zéro. Lire la luminance des trois canaux
+ * (`0.299·m`) donnait donc une silhouette à 30 % d'opacité — le premier plan se
+ * fondait dans le fond flou et **toute l'image paraissait floutée**. C'est
+ * exactement le défaut constaté.
+ *
+ * Le rouge est utilisé quand l'alpha a été aplati à 255 par une couche
+ * intermédiaire (canvas 2D opaque) : les deux canaux restent alors équivalents.
+ */
+export function maskValueForPixel(red: number, alpha: number): number {
+  return alpha >= 250 ? red : alpha
+}
+
+/**
+ * Opacité du premier plan pour une valeur de masque (0–255).
+ *
+ * Le masque MediaPipe est **progressif** (valeurs intermédiaires sur les
+ * contours). Une rampe douce entre 15 % et 60 % rend le visage et le corps
+ * totalement nets tout en conservant un contour fondu : aucun pixel du premier
+ * plan ne laisse plus transparaître le fond flou.
+ */
+export function maskOpacity(maskValue: number): number {
+  const normalized = maskValue / 255
+  const t = Math.min(1, Math.max(0, (normalized - MASK_LOW) / (MASK_HIGH - MASK_LOW)))
+  // Smoothstep : dérivée nulle aux deux bornes, pas de marche visible.
+  return Math.round(t * t * (3 - 2 * t) * 255)
+}
+
+/**
+ * Transforme un masque RGBA (`[m, 0, 0, m]`) en masque d'opacité utilisable par
+ * `destination-in` : RGB blanc, alpha = opacité du premier plan.
+ *
+ * Renvoie la couverture : fraction de l'image occupée par la silhouette.
+ * Aucune donnée d'image n'est conservée ni transmise, seul ce ratio est exposé.
+ */
+export function applyPersonMask(data: Uint8ClampedArray): number {
+  let personPixels = 0
+
+  for (let index = 0; index < data.length; index += 4) {
+    const value = maskValueForPixel(data[index], data[index + 3])
+    const opacity = maskOpacity(value)
+    data[index] = 255
+    data[index + 1] = 255
+    data[index + 2] = 255
+    data[index + 3] = opacity
+    if (opacity > 127) personPixels += 1
+  }
+
+  const total = data.length / 4
+  return total === 0 ? 0 : personPixels / total
 }
 
 /**
@@ -123,6 +189,8 @@ export type FrameRenderer = (canvas: HTMLCanvasElement, ctx: CanvasRenderingCont
 export interface VideoEffectStats {
   /** Images remises au traitement par le SDK. */
   imagesReceived: number
+  /** Fraction de l'image occupée par la silhouette détectée (0–1). */
+  personCoverage: number
   /** Images effectivement recomposées (fond flouté). */
   imagesBlurred: number
   /** Masques de détourage reçus du moteur. */
@@ -236,6 +304,7 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
   let imagesInWindow = 0
   let masksInWindow = 0
   let failures = 0
+  let personCoverage = 0
 
   /** Résolution de la vérification initiale du moteur. */
   let resolveWarmup: ((ok: boolean) => void) | null = null
@@ -255,6 +324,7 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     render: async () => {},
     stats: () => ({
       imagesReceived,
+      personCoverage,
       imagesBlurred,
       masks,
       imagesPerSecond,
@@ -293,18 +363,11 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     maskCtx.clearRect(0, 0, mask.width, mask.height)
     maskCtx.drawImage(segmentationMask, 0, 0, mask.width, mask.height)
 
-    // Le masque MediaPipe est en niveaux de gris **opaques** : la silhouette est
-    // blanche, le fond noir. La composition canvas travaille sur le canal alpha,
-    // d'où la conversion luminance → alpha.
+    // MediaPipe encode la silhouette dans `[m, 0, 0, m]` : rouge et alpha sont
+    // équivalents. `applyPersonMask` produit un vrai masque d'opacité (RGB
+    // blanc, alpha = premier plan) et renvoie la couverture détectée.
     const image = maskCtx.getImageData(0, 0, mask.width, mask.height)
-    const data = image.data
-    for (let index = 0; index < data.length; index += 4) {
-      const luma = data[index] * 0.299 + data[index + 1] * 0.587 + data[index + 2] * 0.114
-      data[index] = 255
-      data[index + 1] = 255
-      data[index + 2] = 255
-      data[index + 3] = luma
-    }
+    personCoverage = applyPersonMask(image.data)
     maskCtx.putImageData(image, 0, 0)
     maskReady = true
     masks += 1
@@ -405,6 +468,9 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
       // Tant qu'aucun masque n'est disponible, l'image reste nette : mieux vaut
       // une caméra normale qu'un flou intégral pris pour un bug.
       if (!maskReady) return
+
+      // Aucun premier plan détecté : ne rien flouter plutôt que tout flouter.
+      if (personCoverage < MIN_PERSON_COVERAGE) return
 
       // 1. Fond : réduction puis agrandissement lissé (flou peu coûteux, sans
       //    dépendre du filtre canvas de `ctx.filter`).

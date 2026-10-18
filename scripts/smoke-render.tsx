@@ -15,8 +15,11 @@ import vm from 'node:vm'
 import {
   BLUR_ENGINE_SCRIPT_URL,
   VideoEffectError,
+  applyPersonMask,
   applyVideoEffect,
   applyVideoEffectWith,
+  maskOpacity,
+  maskValueForPixel,
   normalizedWorkSize,
   readVideoEffectStats,
 } from '../src/media/backgroundBlur'
@@ -207,6 +210,53 @@ checks.push({
   },
 })
 
+// --- Masque de segmentation ----------------------------------------------
+checks.push({
+  name: 'masque de segmentation',
+  run: () => {
+    // MediaPipe écrit `vec4(m, 0, 0, m)` : rouge et alpha portent la même valeur.
+    expect(maskValueForPixel(255, 255) === 255, 'personne lue à 255 (rouge = alpha)')
+    expect(maskValueForPixel(0, 0) === 0, 'fond lu à 0')
+    expect(maskValueForPixel(128, 128) === 128, 'contour progressif conservé')
+    expect(maskValueForPixel(200, 255) === 200, 'alpha aplati → rouge utilisé')
+
+    // La rampe rend le premier plan totalement net sans toucher au flou du fond.
+    expect(maskOpacity(0) === 0, 'fond → totalement transparent')
+    expect(maskOpacity(255) === 255, 'personne → totalement opaque')
+    expect(maskOpacity(26) === 0, 'bruit de fond éliminé')
+    expect(maskOpacity(153) === 255, 'silhouette franche rendue nette à 60 %')
+
+    // Masque synthétique 8×8 : silhouette 4×4 au centre, fond autour.
+    const size = 8
+    const mask = new Uint8ClampedArray(size * size * 4)
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const index = (y * size + x) * 4
+        const inPerson = x >= 2 && x < 6 && y >= 2 && y < 6
+        // Encodage réel de MediaPipe : [m, 0, 0, m]
+        mask[index] = inPerson ? 255 : 0
+        mask[index + 3] = inPerson ? 255 : 0
+      }
+    }
+
+    const coverage = applyPersonMask(mask)
+    expect(Math.abs(coverage - 0.25) < 0.001, 'couverture = 25 % de l’image')
+
+    const alphaAt = (x: number, y: number) => mask[(y * size + x) * 4 + 3]
+    expect(alphaAt(4, 4) === 255, 'centre → premier plan opaque')
+    expect(alphaAt(0, 0) === 0, 'coin → arrière-plan')
+    expect(alphaAt(2, 2) === 255, 'bord de la silhouette conservé')
+
+    // Composition de référence : la personne nette recouvre le fond flou.
+    const sharp = 200
+    const blurred = 40
+    const compose = (alpha: number) => Math.round((sharp * alpha + blurred * (255 - alpha)) / 255)
+    expect(compose(alphaAt(4, 4)) === sharp, 'centre : image nette, pas le fond flou')
+    expect(compose(alphaAt(0, 0)) === blurred, 'coin : fond flou conservé')
+    expect(compose(alphaAt(7, 7)) === blurred, 'second coin : fond flou conservé')
+  },
+})
+
 // --- Application de l'effet vidéo ----------------------------------------
 checks.push({
   name: 'application du flou',
@@ -245,6 +295,7 @@ checks.push({
       render: async () => {},
       stats: () => ({
         imagesReceived: 3,
+        personCoverage: 0.4,
         imagesBlurred: 3,
         masks: 2,
         imagesPerSecond: 20,
