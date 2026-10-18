@@ -119,6 +119,29 @@ point d'accroche qui est utilisé (`src/media/backgroundBlur.ts`) :
 3. la piste audio et le partage d'écran ne sont jamais touchés, et **aucune seconde capture** de la
    caméra n'est ouverte : le SDK reste propriétaire de la piste.
 
+### Chargement du moteur — cause d'un défaut corrigé
+
+Le paquet `@mediapipe/selfie_segmentation` est un **script classique** qui publie son constructeur
+sur `window.SelfieSegmentation`. Compilé dans le bundle, il ne produit **aucun export ES** :
+l'ancien `import { SelfieSegmentation }` valait `undefined`, la fabrique du middleware levait, et le
+SDK — qui intercepte ces erreurs — republiait la piste brute en répondant `success: true`.
+L'interface affichait donc « Flou · Actif » sans le moindre effet, chez soi comme chez les autres.
+
+Le moteur est désormais chargé par une balise `<script>` servie par l'application
+(`/vendor/mediapipe/selfie_segmentation/selfie_segmentation.js`, même origine), exactement comme le
+documente MediaPipe : plus aucune dépendance à l'interopérabilité du bundler.
+
+Comme le SDK applique un middleware « en silence », trois contrôles rendent désormais tout échec
+visible, avant d'annoncer que l'effet est actif :
+
+1. le moteur doit produire un **masque de test** sur une image locale (aucune image de caméra) ;
+2. la piste publiée (`videoTrack`) doit être **différente** de la piste brute (`rawVideoTrack`) ;
+3. au moins une image doit **atteindre le traitement** dans les 4 secondes.
+
+Chacun de ces contrôles échoue avec un message en français, retire le middleware et laisse la
+caméra normale. Le panneau « Effets de fond » affiche en complément des compteurs (images reçues,
+images recomposées, détourages calculés par seconde) : des **nombres uniquement**, jamais une image.
+
 Choix de conception :
 
 - **opt-in** — « Aucun effet » est l'état par défaut ;
@@ -229,8 +252,9 @@ main, depuis l'adresse de prévisualisation.
 | 4. Vidéo : activer puis couper la caméra de chaque côté | Les vignettes suivent l'état réel, la voix continue de passer |
 | 5. Partage d'écran depuis un PC | L'écran occupe la scène, les caméras passent en vignettes, le son du partage est audible |
 | 6. Chat : un message depuis chaque PC | Message affiché avec auteur et heure des deux côtés ; si le preset interdit l'écrit, le panneau l'explique au lieu d'échouer |
-| 7. Effets : « Flou » sur un PC | Votre silhouette reste nette, l'arrière-plan est flouté chez l'autre participant ; le retour à « Aucun effet » rétablit l'image d'origine |
+| 7. Effets : « Flou » sur un PC | Le panneau affiche des compteurs non nuls (≈ 20 images/s reçues, ≈ 14 détourages/s) ; votre silhouette reste nette, l'arrière-plan est flouté **chez vous et chez l'autre participant** ; le retour à « Aucun effet » rétablit l'image d'origine |
 | 8. Effets sur un navigateur WebKit ancien ou sans WebAssembly SIMD | Message d'échec explicite, caméra normale conservée, aucun écran noir |
+| 9. En pleine réunion, basculer « Aucun effet » → « Flou » → « Aucun effet » | Le changement s'applique en une à deux secondes, sans couper la voix ; les compteurs repartent à chaque activation, l'image d'origine revient au retrait |
 
 Si le chat reste indisponible alors que le panneau est ouvert, vérifier dans le tableau de bord
 Cloudflare RealtimeKit que le preset utilisé (`group_call_host`, `group_call_participant`) autorise

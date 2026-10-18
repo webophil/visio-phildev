@@ -9,7 +9,17 @@ import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
 import { remoteAudioTracks } from '../src/media/remoteAudio'
 import { createMeetingId, generateUuid, isRealtimeKitId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
 import { mediaFailure } from '../src/lib/mediaErrors'
-import { normalizedWorkSize } from '../src/media/backgroundBlur'
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
+
+import {
+  BLUR_ENGINE_SCRIPT_URL,
+  VideoEffectError,
+  applyVideoEffect,
+  applyVideoEffectWith,
+  normalizedWorkSize,
+  readVideoEffectStats,
+} from '../src/media/backgroundBlur'
 import { DEFAULT_MEETING_TITLE, MAX_MEETING_TITLE_LENGTH, normalizeMeetingTitle } from '../src/lib/meetingTitle'
 import { MeetingApiError } from '../src/meeting/rtkApi'
 import { describeChatError, describeSessionError } from '../src/meeting/rtkErrors'
@@ -23,7 +33,7 @@ import {
 } from '../src/lib/format'
 import { parsePath, readRealtimeKitId } from '../src/lib/router'
 
-const checks: { name: string; run: () => void }[] = []
+const checks: { name: string; run: () => void | Promise<void> }[] = []
 
 function expect(condition: boolean, label: string) {
   if (!condition) throw new Error(`ÉCHEC : ${label}`)
@@ -165,6 +175,110 @@ checks.push({
     const odd = normalizedWorkSize(641, 361)
     expect(odd.width % 2 === 0 && odd.height % 2 === 0, 'dimensions paires (pas de couture)')
     expect(normalizedWorkSize(0, 0).width === 0, 'image absente → aucun traitement')
+
+    // Le moteur doit être servi par l'application : jamais un CDN.
+    expect(
+      BLUR_ENGINE_SCRIPT_URL.startsWith('/vendor/mediapipe/selfie_segmentation/'),
+      'moteur servi depuis notre propre origine',
+    )
+    expect(
+      BLUR_ENGINE_SCRIPT_URL.endsWith('/selfie_segmentation.js'),
+      'script du moteur identifié',
+    )
+
+    // Régression réelle (Phase 2.1) : importé dans le bundle, ce paquet ne
+    // publie **aucun** export ES — `import { SelfieSegmentation }` valait
+    // `undefined`, le middleware levait et le SDK republiait la piste brute en
+    // répondant « succès ». Chargé comme un script classique, il publie bien
+    // son constructeur sur l'objet global.
+    const engineSource = readFileSync(
+      new URL(
+        '../node_modules/@mediapipe/selfie_segmentation/selfie_segmentation.js',
+        import.meta.url,
+      ),
+      'utf8',
+    )
+    const sandbox: Record<string, unknown> = { console }
+    vm.runInNewContext(engineSource, sandbox, { filename: 'selfie_segmentation.js' })
+    expect(
+      typeof sandbox.SelfieSegmentation === 'function',
+      'le script du moteur publie son constructeur global',
+    )
+  },
+})
+
+// --- Application de l'effet vidéo ----------------------------------------
+checks.push({
+  name: 'application du flou',
+  run: async () => {
+    /** Faux support média : le SDK y répond « succès » quoi qu'il arrive. */
+    const createFakeMedia = (silentFallback: boolean) => {
+      const raw = { id: 'raw-track' } as unknown as MediaStreamTrack
+      const processed = { id: 'processed-track' } as unknown as MediaStreamTrack
+      let applied = false
+      let removals = 0
+
+      return {
+        media: {
+          videoEnabled: true,
+          get videoTrack() {
+            return applied && !silentFallback ? processed : raw
+          },
+          get rawVideoTrack() {
+            return raw
+          },
+          async addVideoMiddleware() {
+            applied = true
+            return { success: true, message: 'Successfully added the middleware.' }
+          },
+          async removeVideoMiddleware() {
+            applied = false
+            removals += 1
+            return { success: true, message: 'Successfully removed the middleware.' }
+          },
+        },
+        removals: () => removals,
+      }
+    }
+
+    const createFakeRenderer = async () => ({
+      render: async () => {},
+      stats: () => ({
+        imagesReceived: 3,
+        imagesBlurred: 3,
+        masks: 2,
+        imagesPerSecond: 20,
+        masksPerSecond: 14,
+        lastImageAgoMs: 50,
+      }),
+      dispose: () => {},
+    })
+
+    // Cas réellement observé en Phase 2.1 : le SDK répond « succès », garde le
+    // middleware, mais republie la piste brute (sa fabrication a échoué en
+    // silence). L'interface affichait alors « Flou · Actif » sans effet.
+    const silent = createFakeMedia(true)
+    let rejection: unknown = null
+    try {
+      await applyVideoEffectWith(silent.media, 'blur', createFakeRenderer)
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection instanceof VideoEffectError, 'piste brute non substituée → échec explicite')
+    expect(
+      rejection instanceof Error && rejection.message.includes("n'a pas appliqué"),
+      'message explicite pour l’utilisateur',
+    )
+    expect(silent.removals() === 1, 'middleware retiré après échec')
+    expect(readVideoEffectStats() === null, 'aucun rendu fantôme conservé')
+
+    const working = createFakeMedia(false)
+    await applyVideoEffectWith(working.media, 'blur', createFakeRenderer)
+    expect(readVideoEffectStats()?.imagesBlurred === 3, 'compteurs de traitement exposés')
+    await applyVideoEffect(working.media, 'none')
+    expect(readVideoEffectStats() === null, '« Aucun effet » libère le traitement')
+    expect(working.removals() === 1, 'middleware retiré explicitement')
   },
 })
 
@@ -389,7 +503,7 @@ let failures = 0
 for (const check of checks) {
   console.log(`\n▶ ${check.name}`)
   try {
-    check.run()
+    await check.run()
   } catch (error) {
     failures += 1
     console.error(`  ✗ ${(error as Error).message}`)

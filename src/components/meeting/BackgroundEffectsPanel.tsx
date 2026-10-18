@@ -1,8 +1,11 @@
-import { Check, Info, Loader2, Sparkles, WandSparkles } from 'lucide-react'
+import { useEffect, useState } from 'react'
+import { Activity, Check, Info, Loader2, Sparkles, WandSparkles } from 'lucide-react'
 
 import { Notice } from '../ui/Notice'
 import { SidePanel } from '../ui/SidePanel'
 import { NOTICES } from '../../lib/notices'
+import { readVideoEffectStats } from '../../media/backgroundBlur'
+import type { VideoEffectStats } from '../../media/backgroundBlur'
 import { useMeeting } from '../../state/meetingContext'
 import type { VideoEffectId } from '../../types/meeting'
 
@@ -112,6 +115,8 @@ export function BackgroundEffectsPanel() {
           })}
         </ul>
 
+        {videoEffect === 'blur' ? <BlurDiagnostics /> : null}
+
         <Notice tone="info" title="Traitement local" className="text-xs">
           {NOTICES.backgroundEffects}
         </Notice>
@@ -131,5 +136,49 @@ export function BackgroundEffectsPanel() {
         </p>
       </div>
     </SidePanel>
+  )
+}
+
+/**
+ * Compteurs de fonctionnement du détourage.
+ *
+ * Ils répondent à une question simple : « des images traversent-elles vraiment
+ * le traitement ? ». Aucune image, aucun contenu n'est journalisé ni transmis ;
+ * seuls des nombres sont affichés. Un compteur bloqué à 0 alors que la caméra
+ * tourne révèle immédiatement un middleware qui ne reçoit rien.
+ */
+function BlurDiagnostics() {
+  const [stats, setStats] = useState<VideoEffectStats | null>(() => readVideoEffectStats())
+
+  useEffect(() => {
+    const timer = window.setInterval(() => setStats(readVideoEffectStats()), 1000)
+    return () => window.clearInterval(timer)
+  }, [])
+
+  return (
+    <div className="rounded-xl border border-ink-700 bg-ink-850 px-3 py-2.5">
+      <p className="flex items-center gap-2 text-xs font-medium text-slate-200">
+        <Activity aria-hidden="true" className="size-3.5 text-emerald-300" />
+        Traitement en cours
+      </p>
+      <dl className="mt-2 grid grid-cols-2 gap-x-3 gap-y-1 text-[11px] text-slate-400">
+        <dt>Images reçues</dt>
+        <dd className="text-right font-mono tabular-nums text-slate-200">
+          {stats ? `${stats.imagesPerSecond} / s` : '…'}
+        </dd>
+        <dt>Détourages calculés</dt>
+        <dd className="text-right font-mono tabular-nums text-slate-200">
+          {stats ? `${stats.masksPerSecond} / s` : '…'}
+        </dd>
+        <dt>Images recomposées</dt>
+        <dd className="text-right font-mono tabular-nums text-slate-200">
+          {stats ? stats.imagesBlurred : '…'}
+        </dd>
+      </dl>
+      <p className="mt-2 text-[11px] leading-relaxed text-slate-500">
+        Ces compteurs ne contiennent aucune image : ils confirment seulement que le fond est
+        recomposé avant l’envoi.
+      </p>
+    </div>
   )
 }
