@@ -118,6 +118,9 @@ La scène vidéo et le panneau latéral sont **indépendants en taille** :
   (`overflow-wrap: anywhere`) ;
 - les vignettes n'ont **aucune hauteur minimale** : `min-h-0`/`min-w-0` + `auto-rows-fr`, et la
   vidéo est en `object-cover`, donc jamais déformée ;
+- les `<video>` et le cadre d'attente sont **hors du flux** (`absolute inset-0`) : un élément
+  remplacé ne peut pas dicter la hauteur d'une ligne de grille. Activer ou retirer un effet vidéo —
+  donc remplacer la piste — ne change jamais la taille ni la disposition des cadres ;
 - 1 vignette → 1 colonne, 2 à 4 → 2 colonnes, 5 et plus → 3 colonnes sur grand écran.
 
 Ces règles vivent dans `src/components/meeting/layout.ts` et sont vérifiées par
@@ -304,6 +307,7 @@ main, depuis l'adresse de prévisualisation.
 | 8. Effets sur un navigateur WebKit ancien ou sans WebAssembly SIMD | Message d'échec explicite, caméra normale conservée, aucun écran noir |
 | 9. En pleine réunion, basculer « Aucun effet » → « Flou » → « Aucun effet » | Le changement s'applique en une à deux secondes, sans couper la voix ; les compteurs repartent à chaque activation, l'image d'origine revient au retrait |
 | 10. Ouvrir « Participants », « Chat » puis « Effets » ; envoyer un message de 500 caractères sans espace | La taille des vidéos ne change pas, le panneau défile seul, le message passe à la ligne ; à 2, 3, 4 puis 5 participants la grille reste équilibrée et les images ne sont pas déformées |
+| 10 bis. Activer puis retirer « Flou », seul, puis à deux participants | Aucun saut : les cadres gardent exactement la même taille et la même place pendant le remplacement de la piste |
 | 11. Partager l'écran pendant qu'un panneau est ouvert | L'écran garde son ratio (`object-contain`), l'incrustation webcam reste en 16:9 dans le coin |
 
 Si le chat reste indisponible alors que le panneau est ouvert, vérifier dans le tableau de bord

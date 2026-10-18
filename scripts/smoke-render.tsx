@@ -3,7 +3,14 @@ import type { RTKParticipant } from '@cloudflare/realtimekit'
 import { RealtimeKitContext } from '@cloudflare/realtimekit-react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import type { RTKSelf } from '@cloudflare/realtimekit'
+
 import { ChatPanel } from '../src/components/meeting/ChatPanel'
+import {
+  RemoteScreenShare,
+  RtkParticipantVideo,
+  RtkSelfVideo,
+} from '../src/components/meeting/RtkVideoSurface'
 import { RemoteAudioSinks } from '../src/components/meeting/RemoteAudio'
 import {
   COMPACT_TILE_CLASS,
@@ -446,6 +453,69 @@ checks.push({
       'la liste des messages défile dans le panneau',
     )
     expect(html.includes(longWord), 'message long rendu intégralement')
+
+    // --- Un seul participant, puis deux -----------------------------------
+    const one = stageGridClass(1)
+    expect(one.includes('grid-cols-1'), 'seul → une colonne pleine largeur')
+    expect(one.includes('h-full'), 'scène de hauteur explicite (1 participant)')
+
+    const two = stageGridClass(2)
+    expect(two.includes('h-full'), 'scène de hauteur explicite (2 participants)')
+    expect(two.includes('auto-rows-fr'), 'une seule ligne répartie (2 participants)')
+
+    // --- Les médias ne dictent jamais la taille des cadres -----------------
+    const selfStub = {
+      registerVideoElement: () => {},
+      deregisterVideoElement: () => {},
+    } as unknown as RTKSelf
+
+    const selfHtml = renderToStaticMarkup(
+      <RtkSelfVideo
+        self={selfStub}
+        enabled
+        label="Votre caméra"
+        className="size-full"
+        placeholder={<span>caméra coupée</span>}
+      />,
+    )
+    expect(selfHtml.includes('absolute inset-0'), 'aperçu local hors du flux')
+    expect(selfHtml.includes('object-cover'), 'aperçu local rempli sans déformation')
+
+    const participantStub = {
+      id: 'p2',
+      name: 'Aurore',
+      videoEnabled: true,
+      audioEnabled: true,
+      isHost: false,
+      screenShareTracks: null,
+      registerVideoElement: () => {},
+      deregisterVideoElement: () => {},
+      on: () => {},
+      removeListener: () => {},
+    } as unknown as RTKParticipant
+
+    const remoteHtml = renderToStaticMarkup(
+      <RtkParticipantVideo
+        participant={participantStub}
+        enabled
+        label="Flux vidéo de Aurore"
+        className="size-full"
+        placeholder={<span>en attente</span>}
+      />,
+    )
+    expect(remoteHtml.includes('absolute inset-0'), 'vidéo distante hors du flux')
+    expect(remoteHtml.includes('object-cover'), 'vidéo distante remplie sans déformation')
+
+    const shareHtml = renderToStaticMarkup(
+      <RemoteScreenShare
+        participant={participantStub}
+        label="Écran partagé"
+        className="min-h-0 flex-1"
+        placeholder={<span>écran</span>}
+      />,
+    )
+    expect(shareHtml.includes('object-contain'), 'partage d’écran sans recadrage')
+    expect(shareHtml.includes('absolute inset-0'), 'partage d’écran hors du flux')
   },
 })
 

@@ -108,7 +108,10 @@ export function MeetingStage() {
       ))}
 
       {remotes.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-ink-600 bg-ink-900/60 p-6 text-center sm:col-span-1">
+        /* Cadre d'attente : mêmes contraintes qu'une vignette vidéo — il ne
+           doit jamais dicter la hauteur de la ligne, même quand un effet vidéo
+           remplace le flux de la caméra locale. */
+        <div className="flex min-h-0 flex-col items-center justify-center gap-3 overflow-hidden rounded-2xl border border-dashed border-ink-600 bg-ink-900/60 p-6 text-center sm:col-span-1">
           <MonitorUp aria-hidden="true" className="size-6 text-slate-500" />
           <p className="text-sm font-medium text-slate-300">Personne n’a encore rejoint</p>
           <p className="max-w-xs text-xs leading-relaxed text-slate-400">

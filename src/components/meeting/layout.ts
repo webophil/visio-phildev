@@ -28,7 +28,7 @@ export function stageGridClass(tiles: number): string {
   const columns = stageColumns(tiles)
 
   return [
-    'grid min-h-0 min-w-0 flex-1 auto-rows-fr gap-3 overflow-hidden',
+    'grid h-full min-h-0 min-w-0 flex-1 auto-rows-fr gap-3 overflow-hidden',
     columns === 1 ? 'grid-cols-1' : 'grid-cols-1 sm:grid-cols-2',
     columns === 3 ? 'lg:grid-cols-3' : '',
   ]
