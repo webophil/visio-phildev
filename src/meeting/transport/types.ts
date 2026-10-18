@@ -73,8 +73,14 @@ export interface MeetingTransport {
   setCameraEnabled(enabled: boolean): Promise<void>
   setScreenShareEnabled(enabled: boolean): Promise<void>
 
-  /** Applique un effet de traitement vidéo local (`none` retire l'effet). */
-  setVideoEffect(effect: VideoEffectId): Promise<void>
+  /**
+   * Applique un effet de traitement vidéo local (`none` retire l'effet).
+   * `onRuntimeFailure` est appelé si l'effet s'arrête après avoir démarré.
+   */
+  setVideoEffect(
+    effect: VideoEffectId,
+    onRuntimeFailure?: (message: string) => void,
+  ): Promise<void>
 }
 
 export type MeetingTransportFactory = (options: MeetingTransportOptions) => MeetingTransport

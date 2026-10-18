@@ -181,7 +181,10 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
       // publié, jamais à une capture parallèle.
       if (videoEffect !== 'none') {
         try {
-          await nextTransport.setVideoEffect(videoEffect)
+          await nextTransport.setVideoEffect(videoEffect, (message) => {
+            setVideoEffectState('none')
+            setVideoEffectError(message)
+          })
         } catch (error) {
           setVideoEffectState('none')
           setVideoEffectError(
@@ -268,7 +271,12 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
       setVideoEffectError(null)
 
       try {
-        await transport.setVideoEffect(effect)
+        await transport.setVideoEffect(effect, (message) => {
+          // Le détourage s'est arrêté après avoir démarré : l'interface revient
+          // explicitement à « Aucun effet » et explique pourquoi.
+          setVideoEffectState('none')
+          setVideoEffectError(message)
+        })
         setVideoEffectState(effect)
       } catch (error) {
         // L'effet est refusé : la caméra reste diffusée telle quelle et

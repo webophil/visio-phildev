@@ -57,6 +57,17 @@ export function normalizedWorkSize(width: number, height: number): { width: numb
   return { width: scaledWidth, height: scaledHeight }
 }
 
+/**
+ * Signale un arrêt du traitement après un démarrage réussi.
+ * Renseigné par `applyVideoEffect` : le middleware ne connaît pas l'interface,
+ * c'est l'appelant qui décide comment prévenir l'utilisateur.
+ */
+let reportRuntimeFailure: ((message: string) => void) | null = null
+
+/** Message affiché si le détourage s'arrête en cours de route. */
+const RUNTIME_FAILURE_MESSAGE =
+  "Le détourage de l'arrière-plan s'est arrêté : votre caméra est de nouveau diffusée sans effet."
+
 /** Erreur d'application d'un effet, déjà formulée pour l'utilisateur. */
 export class VideoEffectError extends Error {
   constructor(message: string) {
@@ -161,9 +172,15 @@ export async function createBackgroundBlurRenderer(): Promise<FrameRenderer> {
       void segmenter
         .send({ image: work })
         .catch(() => {
-          // Un échec ponctuel du graphe n'interrompt pas l'effet : l'image
-          // suivante retente. Un échec durable laisse simplement la caméra nette.
-          failed = maskReady === false
+          // Aucun masque n'a encore été produit : l'effet n'a jamais fonctionné.
+          // Il est arrêté et l'appelant prévient l'utilisateur, plutôt que de
+          // laisser une case « Flou » cochée sans effet visible.
+          if (!maskReady) {
+            failed = true
+            reportRuntimeFailure?.(RUNTIME_FAILURE_MESSAGE)
+          }
+          // Après un premier masque, un échec ponctuel est ignoré : l'image
+          // suivante retente et le dernier masque reste valable.
         })
         .finally(() => {
           segmenting = false
@@ -208,7 +225,10 @@ const blurMiddleware: VideoMiddleware = () => createBackgroundBlurRenderer()
 export async function applyVideoEffect(
   media: Pick<RTKSelfMedia, 'addVideoMiddleware' | 'removeVideoMiddleware'>,
   effect: VideoEffectId,
+  onRuntimeFailure?: (message: string) => void,
 ): Promise<void> {
+  reportRuntimeFailure = effect === 'blur' ? (onRuntimeFailure ?? null) : null
+
   if (effect === 'none') {
     await media.removeVideoMiddleware(blurMiddleware)
     return

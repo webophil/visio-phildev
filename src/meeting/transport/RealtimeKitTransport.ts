@@ -286,10 +286,13 @@ export class RealtimeKitTransport implements MeetingTransport {
    * Le traitement est local : il ne touche ni la piste audio, ni le partage
    * d'écran, ni les flux des autres participants.
    */
-  async setVideoEffect(effect: VideoEffectId): Promise<void> {
+  async setVideoEffect(
+    effect: VideoEffectId,
+    onRuntimeFailure?: (message: string) => void,
+  ): Promise<void> {
     const self = this.client?.self
     if (!self) return
-    await applyVideoEffect(self, effect)
+    await applyVideoEffect(self, effect, onRuntimeFailure)
   }
 
   // -------------------------------------------------------------------------
