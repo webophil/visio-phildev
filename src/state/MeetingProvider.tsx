@@ -6,11 +6,20 @@ import { meetingDisplayName } from '../lib/ids'
 import { useDuration } from '../lib/useDuration'
 import { useRtkMedia } from '../media/useRtkMedia'
 import { readHostSession } from '../meeting/hostSession'
+import { fetchMeetingInfo } from '../meeting/rtkApi'
 import { describeSessionError } from '../meeting/rtkErrors'
 import { createTransport } from '../meeting/transport'
 import type { MeetingTransport } from '../meeting/transport'
-import { emptySessionState } from '../types/meeting'
-import type { MeetingSessionState, SessionError, SessionPhase, SidePanelId, TransportState } from '../types/meeting'
+import { EMPTY_CHAT_STATE, emptySessionState } from '../types/meeting'
+import type {
+  ChatState,
+  MeetingSessionState,
+  SessionError,
+  SessionPhase,
+  SidePanelId,
+  TransportState,
+  VideoEffectId,
+} from '../types/meeting'
 import { MeetingContext } from './meetingContext'
 import type { MeetingContextValue } from './meetingContext'
 
@@ -62,13 +71,42 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
     connection: realtimeKitId ? 'disconnected' : 'local',
   })
   const [session, setSession] = useState<MeetingSessionState>(() => emptySessionState(5))
+  const [chat, setChatState] = useState<ChatState>(EMPTY_CHAT_STATE)
+  const [videoEffect, setVideoEffectState] = useState<VideoEffectId>('none')
+  const [videoEffectBusy, setVideoEffectBusy] = useState(false)
+  const [videoEffectError, setVideoEffectError] = useState<string | null>(null)
+
+  const [remoteTitle, setRemoteTitle] = useState<string | null>(null)
 
   const participantNameRef = useRef(participantName)
   const hostSession = useMemo(() => readHostSession(), [])
   const isHost = hostSession !== null
 
   const durationMs = useDuration(startedAt)
-  const meetingName = meetingDisplayName(meetingId)
+
+  // Nom de la réunion : le titre saisi à la création est enregistré dans la
+  // réunion RealtimeKit, donc identique pour tous les participants et lisible
+  // sans base de données ni paramètre d'URL. Tant qu'il n'est pas reçu (ou si
+  // la réunion n'a pas de titre), l'identifiant lisible fait foi.
+  useEffect(() => {
+    // Le provider est remonté si l'identifiant change : aucun titre périmé.
+    if (!realtimeKitId) return
+
+    let active = true
+    void fetchMeetingInfo(realtimeKitId)
+      .then((info) => {
+        if (active) setRemoteTitle(info.title)
+      })
+      .catch(() => {
+        // Nom dérivé de l'identifiant : l'affichage reste utile et stable.
+      })
+
+    return () => {
+      active = false
+    }
+  }, [realtimeKitId])
+
+  const meetingName = remoteTitle?.trim() || meetingDisplayName(meetingId)
 
   // Le transport reste la source de l'état de connexion et de la session : il
   // est créé avec son état initial (voir `joinMeeting`), puis observé ici.
@@ -78,9 +116,14 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
     const unsubscribeState = transport.subscribe(setTransportState)
     const unsubscribeSession = transport.subscribeSession(setSession)
 
+    // `subscribeChat` émet immédiatement l'instantané courant : l'historique
+    // déjà chargé au moment de l'entrée en salle est donc repris tel quel.
+    const unsubscribeChat = transport.subscribeChat(setChatState)
+
     return () => {
       unsubscribeState()
       unsubscribeSession()
+      unsubscribeChat()
     }
   }, [transport])
 
@@ -134,6 +177,21 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
 
       await nextTransport.join()
 
+      // L'effet choisi survit à l'entrée en salle : il est appliqué au flux
+      // publié, jamais à une capture parallèle.
+      if (videoEffect !== 'none') {
+        try {
+          await nextTransport.setVideoEffect(videoEffect)
+        } catch (error) {
+          setVideoEffectState('none')
+          setVideoEffectError(
+            error instanceof Error
+              ? error.message
+              : "Le flou d'arrière-plan n'a pas pu être appliqué : votre caméra est diffusée sans effet.",
+          )
+        }
+      }
+
       setTransport(nextTransport)
       setClient(nextTransport.getClient())
       setSession(nextTransport.getSession())
@@ -145,7 +203,7 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
     } finally {
       setJoining(false)
     }
-  }, [hostSession, media, mediaIntent, meetingId, realtimeKitId])
+  }, [hostSession, media, mediaIntent, meetingId, realtimeKitId, videoEffect])
 
   const leaveMeeting = useCallback(async () => {
     if (transport) await transport.leave()
@@ -153,6 +211,7 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
 
     setTransport(null)
     setClient(null)
+    setChatState(EMPTY_CHAT_STATE)
     setSession(emptySessionState(session.maxParticipants))
     setTransportState({
       mode: 'realtimekit',
@@ -195,6 +254,38 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
     [transport],
   )
 
+  const sendChatMessage = useCallback(
+    async (text: string) => (transport ? transport.sendChatMessage(text) : false),
+    [transport],
+  )
+
+  /** Active ou retire un effet vidéo local (flou d'arrière-plan). */
+  const setVideoEffect = useCallback(
+    async (effect: VideoEffectId) => {
+      if (!transport) return
+
+      setVideoEffectBusy(true)
+      setVideoEffectError(null)
+
+      try {
+        await transport.setVideoEffect(effect)
+        setVideoEffectState(effect)
+      } catch (error) {
+        // L'effet est refusé : la caméra reste diffusée telle quelle et
+        // l'interface revient explicitement à « Aucun effet ».
+        setVideoEffectState('none')
+        setVideoEffectError(
+          error instanceof Error
+            ? error.message
+            : "L'effet n'a pas pu être appliqué : votre caméra reste diffusée sans traitement.",
+        )
+      } finally {
+        setVideoEffectBusy(false)
+      }
+    },
+    [transport],
+  )
+
   const value: MeetingContextValue = {
     meetingId,
     meetingName,
@@ -216,6 +307,12 @@ export function MeetingProvider({ meetingId, realtimeKitId, children }: MeetingP
     toggleVideo,
     transport: transportState,
     session,
+    chat,
+    sendChatMessage,
+    videoEffect,
+    setVideoEffect,
+    videoEffectBusy,
+    videoEffectError,
     isHost,
     setMicrophoneEnabled,
     setCameraEnabled,

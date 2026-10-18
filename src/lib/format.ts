@@ -70,6 +70,19 @@ export function formatDuration(milliseconds: number): string {
     : `${pad(minutes)}:${pad(seconds)}`
 }
 
+/**
+ * Heure d'envoi d'un message, au format `14:07` (heure locale).
+ * Les messages d'une réunion vivent quelques minutes : l'heure seule suffit,
+ * et reste lisible sur mobile.
+ */
+export function formatClockTime(milliseconds: number): string {
+  const date = new Date(milliseconds)
+  if (Number.isNaN(date.getTime())) return '--:--'
+
+  const pad = (value: number) => String(value).padStart(2, '0')
+  return `${pad(date.getHours())}:${pad(date.getMinutes())}`
+}
+
 /** Accord simple pour les compteurs (« 1 participant », « 2 participants »). */
 export function pluralize(count: number, singular: string, plural: string): string {
   return count > 1 ? plural : singular

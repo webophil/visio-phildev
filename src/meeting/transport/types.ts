@@ -1,7 +1,7 @@
 import type RTKClient from '@cloudflare/realtimekit'
 import type { RTKSelfMedia } from '@cloudflare/realtimekit'
 
-import type { MeetingSessionState, TransportState } from '../../types/meeting'
+import type { ChatState, MeetingSessionState, TransportState, VideoEffectId } from '../../types/meeting'
 
 /**
  * Frontière d'intégration vers l'infrastructure temps réel.
@@ -51,6 +51,18 @@ export interface MeetingTransport {
   /** Observe les changements de session ; renvoie la fonction de désabonnement. */
   subscribeSession(listener: (session: MeetingSessionState) => void): () => void
 
+  /** Instantané du chat de réunion (messages reçus, permissions, erreurs). */
+  getChat(): ChatState
+
+  /** Observe les changements du chat ; renvoie la fonction de désabonnement. */
+  subscribeChat(listener: (chat: ChatState) => void): () => void
+
+  /**
+   * Envoie un message texte aux participants connectés.
+   * Renvoie `true` quand le message a été accepté par le SDK.
+   */
+  sendChatMessage(text: string): Promise<boolean>
+
   /** Client RealtimeKit, exposé uniquement à l'interface de la salle. */
   getClient(): RTKClient | null
 
@@ -60,6 +72,9 @@ export interface MeetingTransport {
   setMicrophoneEnabled(enabled: boolean): Promise<void>
   setCameraEnabled(enabled: boolean): Promise<void>
   setScreenShareEnabled(enabled: boolean): Promise<void>
+
+  /** Applique un effet de traitement vidéo local (`none` retire l'effet). */
+  setVideoEffect(effect: VideoEffectId): Promise<void>
 }
 
 export type MeetingTransportFactory = (options: MeetingTransportOptions) => MeetingTransport

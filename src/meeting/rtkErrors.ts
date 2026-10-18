@@ -67,6 +67,30 @@ function describeDomException(error: unknown): Description | null {
   }
 }
 
+/**
+ * Traduit un échec d'envoi de message en une phrase affichable.
+ * Les codes viennent de la même table que les erreurs de session ; aucun
+ * message brut du SDK n'est affiché.
+ */
+export function describeChatError(error: unknown): string {
+  const clientCode = readClientCode(error)
+
+  if (clientCode === '0101' || clientCode === '1101') {
+    return "Votre profil de participant n'autorise pas l'envoi de messages dans cette réunion."
+  }
+  if (clientCode === '0013') {
+    return 'Trop de messages envoyés en peu de temps. Patientez quelques instants.'
+  }
+  if (clientCode === '0011' || clientCode === '0012' || clientCode === '0014') {
+    return "Le message n'est pas parti : la connexion à la réunion est interrompue. Réessayez dans un instant."
+  }
+  if (clientCode === '0004') {
+    return "Votre accès à la réunion n'est plus valide : rechargez la page pour continuer à écrire."
+  }
+
+  return "Le message n'a pas pu être envoyé. Réessayez dans quelques instants."
+}
+
 /** Traduit une erreur quelconque en message affichable et actionnable. */
 export function describeSessionError(error: unknown): SessionError {
   if (error instanceof MeetingApiError) {

@@ -17,6 +17,10 @@ dist-ssr
 dev-server.log
 dev-server.pid
 
+# Moteur de segmentation recopié depuis node_modules à chaque build
+# (voir scripts/vendor-mediapipe.mjs) : jamais versionné.
+public/vendor/
+
 # Editor directories and files
 .vscode/*
 !.vscode/extensions.json

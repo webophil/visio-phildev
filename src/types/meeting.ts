@@ -83,6 +83,56 @@ export interface ScreenShareState {
   isLocal: boolean
 }
 
+/**
+ * Effet appliqué à la caméra locale **avant diffusion**.
+ * `none` diffuse le flux tel quel ; `blur` détoure la silhouette et floute le
+ * fond (traitement local, aucun service externe).
+ */
+export type VideoEffectId = 'none' | 'blur'
+
+/** Message du chat de réunion, tel qu'affiché dans le panneau. */
+export interface ChatMessageView {
+  id: string
+  /** Nom affiché de l'auteur, fourni par le SDK. */
+  authorName: string
+  /** Vrai pour les messages envoyés depuis ce navigateur. */
+  isLocal: boolean
+  /** Horodatage de réception (millisecondes). */
+  sentAt: number
+  text: string
+}
+
+/**
+ * État du chat de réunion.
+ * Les messages vivent dans la réunion RealtimeKit : ils ne sont ni stockés ni
+ * relus après la réunion, et disparaissent avec elle.
+ */
+export interface ChatState {
+  /** Le chat est-il proposé par le profil de participant ? */
+  available: boolean
+  /** L'envoi est-il autorisé par le profil de participant ? */
+  canSend: boolean
+  /** Explication affichée quand le chat n'est pas utilisable. */
+  unavailableReason: string | null
+  /** Longueur maximale d'un message, imposée par le SDK. */
+  maxTextLength: number
+  messages: ChatMessageView[]
+  /** Envoi en cours. */
+  sending: boolean
+  /** Dernière erreur d'envoi, en français. */
+  error: string | null
+}
+
+export const EMPTY_CHAT_STATE: ChatState = {
+  available: false,
+  canSend: false,
+  unavailableReason: null,
+  maxTextLength: 500,
+  messages: [],
+  sending: false,
+  error: null,
+}
+
 /** Erreur lisible remontée par la couche temps réel. */
 export interface SessionError {
   code: string

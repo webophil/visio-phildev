@@ -2,16 +2,46 @@ import RealtimeKitClient from '@cloudflare/realtimekit'
 import type RTKClient from '@cloudflare/realtimekit'
 import type { RTKClientOptions, RTKParticipant } from '@cloudflare/realtimekit'
 
-import { emptySessionState } from '../../types/meeting'
-import type { MeetingSessionState, ParticipantView, TransportState } from '../../types/meeting'
+import { EMPTY_CHAT_STATE, emptySessionState } from '../../types/meeting'
+import type {
+  ChatMessageView,
+  ChatState,
+  MeetingSessionState,
+  ParticipantView,
+  TransportState,
+} from '../../types/meeting'
+import { applyVideoEffect } from '../../media/backgroundBlur'
+import type { VideoEffectId } from '../../types/meeting'
 import { getOrCreateGuestId } from '../hostSession'
 import { MeetingApiError, requestParticipantToken } from '../rtkApi'
 import type { ParticipantRole } from '../rtkApi'
-import { describeSessionError } from '../rtkErrors'
+import { describeChatError, describeSessionError } from '../rtkErrors'
 import type { MeetingTransport, MeetingTransportOptions } from './types'
 
 /** Capacité annoncée tant que le serveur ne l'a pas confirmée. */
 const DEFAULT_MAX_PARTICIPANTS = 5
+
+/** Nombre de messages d'historique demandés à l'entrée en réunion. */
+const CHAT_HISTORY_LIMIT = 40
+
+/** Longueur de message retenue si le SDK n'annonce pas sa propre limite. */
+const FALLBACK_MAX_TEXT_LENGTH = 500
+
+/**
+ * Message texte tel qu'exposé par le SDK.
+ * Sous-ensemble structurel assumé : les types publiés décrivent une union
+ * discriminée par une énumération (`MessageType`) qui n'est pas exportée.
+ */
+interface ChatMessageLike {
+  id: string
+  type: string
+  userId: string
+  displayName?: string
+  message?: string
+  time?: Date
+  timeMs?: number
+  targetUserIds?: string[]
+}
 
 /** Signification affichable d'un état de sortie signalé par le SDK. */
 const LEFT_STATE_MESSAGES: Record<string, string> = {
@@ -41,7 +71,9 @@ export class RealtimeKitTransport implements MeetingTransport {
   private session: MeetingSessionState
   private readonly stateListeners = new Set<(state: TransportState) => void>()
   private readonly sessionListeners = new Set<(session: MeetingSessionState) => void>()
+  private readonly chatListeners = new Set<(chat: ChatState) => void>()
   private readonly detachers: Array<() => void> = []
+  private chat: ChatState = EMPTY_CHAT_STATE
 
   constructor(options: MeetingTransportOptions) {
     this.options = options
@@ -77,6 +109,55 @@ export class RealtimeKitTransport implements MeetingTransport {
     this.sessionListeners.add(listener)
     return () => {
       this.sessionListeners.delete(listener)
+    }
+  }
+
+  getChat(): ChatState {
+    return this.chat
+  }
+
+  /**
+   * Observe le chat. L'état courant est transmis immédiatement : l'abonnement
+   * arrive après l'entrée en salle, donc après le chargement de l'historique.
+   */
+  subscribeChat(listener: (chat: ChatState) => void): () => void {
+    this.chatListeners.add(listener)
+    listener(this.chat)
+    return () => {
+      this.chatListeners.delete(listener)
+    }
+  }
+
+  /**
+   * Envoie un message texte dans la salle.
+   * Le message part par la messagerie **native** de RealtimeKit : il n'est ni
+   * stocké par l'application, ni relu après la réunion.
+   */
+  async sendChatMessage(text: string): Promise<boolean> {
+    const client = this.client
+    const trimmed = text.trim()
+    if (!client || trimmed.length === 0) return false
+
+    if (!this.chat.available || !this.chat.canSend) {
+      this.setChat({ error: this.chat.unavailableReason ?? "Le chat n'est pas autorisé dans cette réunion." })
+      return false
+    }
+
+    if (trimmed.length > this.chat.maxTextLength) {
+      this.setChat({ error: `Votre message dépasse ${this.chat.maxTextLength} caractères.` })
+      return false
+    }
+
+    this.setChat({ sending: true, error: null })
+
+    try {
+      await client.chat.sendTextMessage(trimmed)
+      this.refreshChat(client)
+      this.setChat({ sending: false })
+      return true
+    } catch (error) {
+      this.setChat({ sending: false, error: describeChatError(error) })
+      return false
     }
   }
 
@@ -129,6 +210,8 @@ export class RealtimeKitTransport implements MeetingTransport {
       await client.join()
       this.applyDisplayName(displayName)
       this.refreshSession()
+      // Les droits de messagerie ne sont connus qu'après l'entrée dans la salle.
+      this.attachChat(client)
       this.setConnection('connected')
     } catch (error) {
       this.client = null
@@ -153,8 +236,10 @@ export class RealtimeKitTransport implements MeetingTransport {
     }
 
     this.session = emptySessionState(this.session.maxParticipants)
+    this.chat = EMPTY_CHAT_STATE
     this.setConnection('disconnected')
     this.emitSession()
+    this.emitChat()
   }
 
   async setMicrophoneEnabled(enabled: boolean): Promise<void> {
@@ -194,6 +279,17 @@ export class RealtimeKitTransport implements MeetingTransport {
       this.recordError(error)
     }
     this.refreshSession()
+  }
+
+  /**
+   * Applique un effet au flux vidéo publié.
+   * Le traitement est local : il ne touche ni la piste audio, ni le partage
+   * d'écran, ni les flux des autres participants.
+   */
+  async setVideoEffect(effect: VideoEffectId): Promise<void> {
+    const self = this.client?.self
+    if (!self) return
+    await applyVideoEffect(self, effect)
   }
 
   // -------------------------------------------------------------------------
@@ -245,6 +341,67 @@ export class RealtimeKitTransport implements MeetingTransport {
       }
       throw error
     }
+  }
+
+  /** Abonne la messagerie de la salle et charge l'historique déjà échangé. */
+  private attachChat(client: RTKClient): void {
+    this.chat = {
+      ...EMPTY_CHAT_STATE,
+      ...readChatPermissions(client),
+      maxTextLength: readMaxTextLength(client),
+    }
+
+    const onChatUpdate = () => this.refreshChat(client)
+    client.chat.on('chatUpdate', onChatUpdate)
+    this.detachers.push(() => client.chat.removeListener('chatUpdate', onChatUpdate))
+
+    this.emitChat()
+    void this.loadChatHistory(client)
+  }
+
+  /**
+   * Historique des messages publics déjà envoyés dans la réunion.
+   * Un échec n'est pas bloquant : les messages suivants arrivent par l'événement
+   * `chatUpdate`, et le panneau reste utilisable.
+   */
+  private async loadChatHistory(client: RTKClient): Promise<void> {
+    if (!this.chat.available) return
+
+    try {
+      const history = (await client.chat.fetchPublicMessages({
+        limit: CHAT_HISTORY_LIMIT,
+        direction: 'before',
+      })) as unknown as ChatMessageLike[]
+
+      const selfUserId = readSelfUserId(client)
+      const incoming = (history ?? [])
+        .map((message) => toChatView(message, selfUserId))
+        .filter((message): message is ChatMessageView => message !== null)
+
+      this.setChat({ messages: mergeChatMessages(this.chat.messages, incoming) })
+    } catch {
+      // Historique indisponible : le chat en direct reste fonctionnel.
+    }
+  }
+
+  /** Recopie l'état des messages du SDK dans l'instantané exposé à l'interface. */
+  private refreshChat(client: RTKClient): void {
+    const selfUserId = readSelfUserId(client)
+    const messages = (client.chat.messages as unknown as ChatMessageLike[] | undefined) ?? []
+    const incoming = messages
+      .map((message) => toChatView(message, selfUserId))
+      .filter((message): message is ChatMessageView => message !== null)
+
+    this.setChat({ messages: mergeChatMessages(this.chat.messages, incoming) })
+  }
+
+  private setChat(patch: Partial<ChatState>): void {
+    this.chat = { ...this.chat, ...patch }
+    this.emitChat()
+  }
+
+  private emitChat(): void {
+    for (const listener of this.chatListeners) listener(this.chat)
   }
 
   private applyDisplayName(displayName: string): void {
@@ -365,6 +522,107 @@ export class RealtimeKitTransport implements MeetingTransport {
   private emitSession(): void {
     for (const listener of this.sessionListeners) listener(this.session)
   }
+}
+
+/** Identifiant d'utilisateur local, utilisé pour distinguer ses propres messages. */
+function readSelfUserId(client: RTKClient): string {
+  try {
+    return client.self.userId ?? ''
+  } catch {
+    return ''
+  }
+}
+
+/** Limite de longueur annoncée par le SDK (bornée pour l'affichage). */
+function readMaxTextLength(client: RTKClient): number {
+  try {
+    const limit = client.chat.maxTextLimit
+    return Number.isFinite(limit) && limit > 0 ? Math.min(limit, 2000) : FALLBACK_MAX_TEXT_LENGTH
+  } catch {
+    return FALLBACK_MAX_TEXT_LENGTH
+  }
+}
+
+/**
+ * Droits de messagerie du profil de participant.
+ * Ils sont lus dans le preset : le panneau n'annonce jamais un chat utilisable
+ * quand le profil l'interdit.
+ */
+function readChatPermissions(
+  client: RTKClient,
+): Pick<ChatState, 'available' | 'canSend' | 'unavailableReason'> {
+  try {
+    const chat = client.self.permissions?.chatPublic
+
+    if (!chat) {
+      return {
+        available: false,
+        canSend: false,
+        unavailableReason:
+          "Le profil de participant de cette réunion ne communique pas ses droits de messagerie.",
+      }
+    }
+
+    if (!chat.text) {
+      return {
+        available: false,
+        canSend: false,
+        unavailableReason:
+          "Le profil de participant de cette réunion n'autorise pas les messages écrits. L'organisateur peut l'activer dans le tableau de bord Cloudflare RealtimeKit.",
+      }
+    }
+
+    return {
+      available: true,
+      canSend: chat.canSend,
+      unavailableReason: chat.canSend
+        ? null
+        : "Votre profil de participant permet de lire les messages, mais pas d'en envoyer.",
+    }
+  } catch {
+    return {
+      available: false,
+      canSend: false,
+      unavailableReason: "Les droits de messagerie de cette réunion n'ont pas pu être lus.",
+    }
+  }
+}
+
+/** Horodatage d'un message, en millisecondes. */
+function messageTime(message: ChatMessageLike): number {
+  if (typeof message.timeMs === 'number' && Number.isFinite(message.timeMs)) return message.timeMs
+  if (message.time instanceof Date) return message.time.getTime()
+  return Date.now()
+}
+
+/** Traduit un message du SDK en vue affichable, ou `null` s'il n'est pas textuel. */
+function toChatView(message: ChatMessageLike, selfUserId: string): ChatMessageView | null {
+  if (message.type !== 'text') return null
+
+  const text = (message.message ?? '').trim()
+  if (text.length === 0) return null
+
+  // Message adressé à certains participants : il n'apparaît pas dans le canal
+  // public du panneau.
+  if (Array.isArray(message.targetUserIds) && message.targetUserIds.length > 0) return null
+
+  return {
+    id: message.id,
+    authorName: message.displayName?.trim() || 'Participant',
+    isLocal: message.userId === selfUserId,
+    sentAt: messageTime(message),
+    text,
+  }
+}
+
+/** Fusion sans doublon (les messages peuvent arriver par l'historique et par événement). */
+function mergeChatMessages(
+  current: ChatMessageView[],
+  incoming: ChatMessageView[],
+): ChatMessageView[] {
+  const byId = new Map<string, ChatMessageView>()
+  for (const message of [...current, ...incoming]) byId.set(message.id, message)
+  return [...byId.values()].sort((a, b) => a.sentAt - b.sentAt)
 }
 
 function toParticipantView(participant: RTKParticipant): ParticipantView {

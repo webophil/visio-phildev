@@ -9,9 +9,18 @@ import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
 import { remoteAudioTracks } from '../src/media/remoteAudio'
 import { createMeetingId, generateUuid, isRealtimeKitId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
 import { mediaFailure } from '../src/lib/mediaErrors'
+import { normalizedWorkSize } from '../src/media/backgroundBlur'
+import { DEFAULT_MEETING_TITLE, MAX_MEETING_TITLE_LENGTH, normalizeMeetingTitle } from '../src/lib/meetingTitle'
 import { MeetingApiError } from '../src/meeting/rtkApi'
-import { describeSessionError } from '../src/meeting/rtkErrors'
-import { buildInvitationUrl, buildMeetingUrl, formatDuration, meetingPath, parseMeetingLink } from '../src/lib/format'
+import { describeChatError, describeSessionError } from '../src/meeting/rtkErrors'
+import {
+  buildInvitationUrl,
+  buildMeetingUrl,
+  formatClockTime,
+  formatDuration,
+  meetingPath,
+  parseMeetingLink,
+} from '../src/lib/format'
 import { parsePath, readRealtimeKitId } from '../src/lib/router'
 
 const checks: { name: string; run: () => void }[] = []
@@ -115,6 +124,47 @@ checks.push({
         `https://visio.phildev.online/rdv-aurore?r=${UUID}`,
       'lien d’invitation complet',
     )
+
+    expect(formatClockTime(new Date(2026, 0, 5, 14, 7).getTime()) === '14:07', 'heure d’un message')
+    expect(formatClockTime(new Date(2026, 0, 5, 9, 3, 30).getTime()) === '09:03', 'heure à un chiffre complétée')
+    expect(formatClockTime(Number.NaN) === '--:--', 'horodatage invalide neutre')
+  },
+})
+
+// --- Nom de la réunion ---------------------------------------------------
+checks.push({
+  name: 'nom de réunion',
+  run: () => {
+    expect(normalizeMeetingTitle('') === DEFAULT_MEETING_TITLE, 'champ vide → nom par défaut')
+    expect(normalizeMeetingTitle('   ') === DEFAULT_MEETING_TITLE, 'espaces seuls → nom par défaut')
+    expect(normalizeMeetingTitle(undefined) === DEFAULT_MEETING_TITLE, 'absence → nom par défaut')
+    expect(
+      normalizeMeetingTitle('  Rendez-vous   Aurore Studer ') === 'Rendez-vous Aurore Studer',
+      'espaces réduits',
+    )
+    expect(
+      normalizeMeetingTitle('x'.repeat(200)).length === MAX_MEETING_TITLE_LENGTH,
+      'longueur bornée',
+    )
+    expect(DEFAULT_MEETING_TITLE === 'Réunion PhilDEV', 'nom par défaut attendu par l’interface')
+  },
+})
+
+// --- Flou d'arrière-plan -------------------------------------------------
+checks.push({
+  name: 'flou d’arrière-plan',
+  run: () => {
+    expect(
+      normalizedWorkSize(1280, 720).width === 480 && normalizedWorkSize(1280, 720).height === 270,
+      'plan de travail réduit à 480 px de large',
+    )
+    expect(
+      normalizedWorkSize(320, 240).width === 320 && normalizedWorkSize(320, 240).height === 240,
+      'petite image conservée telle quelle',
+    )
+    const odd = normalizedWorkSize(641, 361)
+    expect(odd.width % 2 === 0 && odd.height % 2 === 0, 'dimensions paires (pas de couture)')
+    expect(normalizedWorkSize(0, 0).width === 0, 'image absente → aucun traitement')
   },
 })
 
@@ -194,6 +244,17 @@ checks.push({
       'API média absente : aucune relance proposée',
     )
     expect(mediaFailure('no-device').title.includes('Aucun périphérique'), 'matériel absent expliqué')
+
+    expect(
+      describeChatError({ code: '1101' }).includes('autorise pas'),
+      'chat refusé par le profil expliqué',
+    )
+    expect(describeChatError({ code: '0013' }).includes('Trop de messages'), 'limite de débit expliquée')
+    expect(
+      describeChatError({ code: '0012' }).includes('connexion'),
+      'coupure pendant l’envoi expliquée',
+    )
+    expect(describeChatError(undefined).includes('Réessayez'), 'échec inconnu : message actionnable')
   },
 })
 
@@ -306,6 +367,8 @@ checks.push({
     expect(html.includes('Rejoindre'), 'bouton rejoindre')
     expect(html.includes('Lien d’invitation'), 'champ de lien')
     expect(html.includes('Accès organisateur'), 'accès protégé de l’organisateur')
+    expect(html.includes('Nom de la réunion'), 'champ du nom de réunion')
+    expect(html.includes(DEFAULT_MEETING_TITLE), 'nom de réunion par défaut proposé')
     expect(html.includes('PhilDEV'), 'marque PhilDEV')
     expect(html.includes('Visio'), 'marque Visio')
     expect(html.includes('lang="fr"') === false, 'aucun attribut parasite')
