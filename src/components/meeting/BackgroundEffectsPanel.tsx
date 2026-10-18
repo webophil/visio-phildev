@@ -181,7 +181,8 @@ function BlurDiagnostics() {
       </dl>
       {stats ? (
         <p className="mt-1.5 font-mono text-[11px] text-slate-500">
-          masque brut · R {stats.maskRedMean} · A {stats.maskAlphaMean}
+          flux {stats.frameWidth}×{stats.frameHeight} · masque brut · R {stats.maskRedMean} · A{' '}
+          {stats.maskAlphaMean}
         </p>
       ) : null}
       <p className="mt-2 text-[11px] leading-relaxed text-slate-500">

@@ -6,15 +6,23 @@ import type { VideoEffectId } from '../types/meeting'
  * Flou d'arrière-plan — traitement **entièrement local**.
  *
  * Le SDK RealtimeKit n'expose pas d'effet de flou natif : il fournit un point
- * d'accroche, `addVideoMiddleware`, qui confie chaque image de la caméra à un
- * canevas avant sa publication. Ce module s'appuie dessus :
+ * d'accroche, `addVideoMiddleware`. Ce module s'appuie dessus :
  *
  * 1. un détourage de la silhouette est calculé localement par MediaPipe Selfie
  *    Segmentation (WebAssembly servi par l'application, aucun service externe) ;
  * 2. l'image publiée est composée du fond flouté et de la silhouette nette.
  *
- * Aucune seconde capture de la caméra n'est ouverte : le SDK reste l'unique
- * propriétaire de la piste vidéo, et la piste audio n'est jamais touchée.
+ * **Le rendu est piloté ici, pas par le SDK.** La raison est mesurable : le
+ * pipeline interne du SDK dimensionne son canvas avec la largeur de l'élément
+ * `<video>` qu'il crée (`canvas.height = video.width || settings.height`), soit
+ * une valeur d'attribut, pas la taille réelle de la caméra. La piste publiée
+ * devenait carrée, puis rognée par l'affichage. Avec
+ * `disablePerFrameCanvasRendering`, le SDK nous confie le canvas : sa taille est
+ * celle de la caméra, le masque a le même rapport d'image que l'image, et
+ * l'alignement personne / fond est exact.
+ *
+ * Aucune seconde capture de la caméra n'est ouverte : nous consommons la piste
+ * brute du SDK (`rawVideoTrack`), et la piste audio n'est jamais touchée.
  */
 
 /** Dossier des fichiers du moteur, servis depuis `public/vendor`. */
@@ -25,15 +33,16 @@ const ENGINE_PATH = '/vendor/mediapipe/selfie_segmentation'
  * jamais par un `import` du bundle.
  *
  * Le paquet npm `@mediapipe/selfie_segmentation` est un script classique qui
- * publie son constructeur sur `window.SelfieSegmentation`. Compilé par le
- * bundler, il produit un module **sans aucun export** : l'ancien
+ * publie son constructeur sur `window.SelfieSegmentation`. Compilé par
+ * le bundler, il produit un module **sans aucun export** : l'ancien
  * `import { SelfieSegmentation }` valait `undefined`, la fabrique du middleware
  * levait, le SDK retombait silencieusement sur la piste brute et l'interface
- * affichait « Flou · Actif » sans le moindre effet. Charger le script comme le
- * documente MediaPipe supprime cette dépendance à l'interopérabilité du
- * bundler.
+ * affichait « Flou · Actif » sans le moindre effet.
  */
 export const BLUR_ENGINE_SCRIPT_URL = `${ENGINE_PATH}/selfie_segmentation.js`
+
+/** Cadence de composition du flux publié. */
+const FRAME_INTERVAL_MS = 50
 
 /** Fréquence du détourage : entre deux calculs, le dernier masque est réutilisé. */
 const SEGMENT_INTERVAL_MS = 70
@@ -50,34 +59,36 @@ const BLUR_DIVISOR = 8
 /** Rayon d'adoucissement du contour de la silhouette, en pixels. */
 const FEATHER_PX = 3
 
+/**
+ * Largeur maximale du calque « personne nette ».
+ * Au-delà, la composition coûte plus cher que le gain de netteté apporté.
+ */
+const PERSON_MAX_WIDTH = 960
+
+/** Largeur maximale du flux publié (une webcam 1440p est ramenée à 1280 px). */
+const MAX_FRAME_WIDTH = 1280
+
 /** Bornes de la rampe appliquée au masque, en fraction de 255. */
 const MASK_LOW = 0.15
 const MASK_HIGH = 0.6
 
 /**
  * En dessous de cette couverture, aucun premier plan n'est détecté : l'image
- * est laissée **nette** plutôt que floutée intégralement. Un masque inexploitable
- * ne doit jamais produire une vidéo entièrement floue.
+ * est laissée **nette** plutôt que floutée intégralement.
  */
 const MIN_PERSON_COVERAGE = 0.005
-
-/**
- * Largeur maximale du calque « personne nette ».
- * Au-delà, la composition coûte plus cher que le gain de netteté apporté :
- * mieux vaut une silhouette légèrement adoucie qu'une réunion qui saccade.
- */
-const PERSON_MAX_WIDTH = 960
 
 /** Délai maximal accordé au moteur pour produire un premier masque. */
 const ENGINE_WARMUP_TIMEOUT_MS = 12000
 
-/**
- * Délai laissé au SDK pour alimenter le traitement en images avant de conclure
- * qu'il ne l'appelle pas. Le SDK interroge le middleware toutes les 50 ms.
- */
+/** Délai laissé à la piste brute pour alimenter le traitement en images. */
 const FRAME_ARRIVAL_TIMEOUT_MS = 4000
 
-/** Taille du plan de travail pour une image source. */
+/**
+ * Taille du plan de travail pour une image source.
+ * Bornée à `WORK_WIDTH` et conservée paire (les arrondis impairs créent des
+ * coutures visibles sur certains pilotes graphiques).
+ */
 export function normalizedWorkSize(width: number, height: number): { width: number; height: number } {
   if (width <= 0 || height <= 0) return { width: 0, height: 0 }
 
@@ -89,16 +100,56 @@ export function normalizedWorkSize(width: number, height: number): { width: numb
 }
 
 /**
+ * Taille du flux publié, déduite de la **piste réelle** et non d'un attribut
+ * HTML. La largeur est plafonnée, le rapport d'image est conservé au pixel.
+ */
+export function normalizedFrameSize(
+  width: number,
+  height: number,
+): { width: number; height: number } {
+  const sourceWidth = width > 0 ? width : 1280
+  const sourceHeight = height > 0 ? height : 720
+  const targetWidth = Math.max(2, Math.round(Math.min(MAX_FRAME_WIDTH, sourceWidth) / 2) * 2)
+  const targetHeight = Math.max(
+    2,
+    Math.round(((targetWidth * sourceHeight) / sourceWidth) / 2) * 2,
+  )
+
+  return { width: targetWidth, height: targetHeight }
+}
+
+/**
+ * Taille du masque pour une image donnée.
+ *
+ * Le masque **doit** avoir le rapport d'image de l'image source : un masque
+ * figé en 16:9 sur une vidéo carrée était étiré verticalement, et la silhouette
+ * restaurée ne correspondait plus au visage (d'où une image entièrement floue).
+ */
+export function maskSizeFor(
+  frameWidth: number,
+  frameHeight: number,
+  maskWidth = MASK_WIDTH,
+): { width: number; height: number } {
+  if (frameWidth <= 0 || frameHeight <= 0) {
+    return { width: maskWidth, height: Math.round(maskWidth * 0.5625) }
+  }
+
+  return {
+    width: maskWidth,
+    height: Math.max(1, Math.round((maskWidth * frameHeight) / frameWidth)),
+  }
+}
+
+/**
  * Valeur du masque pour un pixel, telle que MediaPipe l'encode réellement.
  *
  * Le convertisseur GPU écrit `vec4(m, 0, 0, m)` : **rouge et alpha portent la
  * même valeur**, vert et bleu valent zéro. Lire la luminance des trois canaux
- * (`0.299·m`) donnait donc une silhouette à 30 % d'opacité — le premier plan se
- * fondait dans le fond flou et **toute l'image paraissait floutée**. C'est
- * exactement le défaut constaté.
+ * (`0,299 × m`) donnait une silhouette à 30 % d'opacité — le premier plan se
+ * fondait dans le fond flou et toute l'image paraissait floutée.
  *
  * Le rouge est utilisé quand l'alpha a été aplati à 255 par une couche
- * intermédiaire (canvas 2D opaque) : les deux canaux restent alors équivalents.
+ * intermédiaire ; les deux canaux restent alors équivalents.
  */
 export function maskValueForPixel(red: number, alpha: number): number {
   return alpha >= 250 ? red : alpha
@@ -109,8 +160,7 @@ export function maskValueForPixel(red: number, alpha: number): number {
  *
  * Le masque MediaPipe est **progressif** (valeurs intermédiaires sur les
  * contours). Une rampe douce entre 15 % et 60 % rend le visage et le corps
- * totalement nets tout en conservant un contour fondu : aucun pixel du premier
- * plan ne laisse plus transparaître le fond flou.
+ * totalement nets tout en conservant un contour fondu.
  */
 export function maskOpacity(maskValue: number): number {
   const normalized = maskValue / 255
@@ -124,8 +174,7 @@ export function maskOpacity(maskValue: number): number {
  *
  * `redMean` et `alphaMean` sont les moyennes **brutes** des deux canaux que
  * MediaPipe utilise : elles permettent d'identifier sans ambiguïté le format
- * renvoyé par la version installée (rouge = alpha, alpha seul, ou alpha aplati
- * à 255).
+ * renvoyé par la version installée.
  */
 export interface MaskStats {
   /** Fraction de l'image occupée par la silhouette (0–1). */
@@ -205,16 +254,13 @@ export class VideoEffectError extends Error {
   }
 }
 
-/** Fonction appliquée à chaque image par le SDK (canvas déjà peint du flux brut). */
-export type FrameRenderer = (canvas: HTMLCanvasElement, ctx: CanvasRenderingContext2D) => Promise<void>
-
 /**
  * Compteurs de fonctionnement, sans aucune donnée d'image.
  * Ils servent à prouver que le traitement reçoit réellement des images et à
  * afficher un état vérifiable dans le panneau « Effets de fond ».
  */
 export interface VideoEffectStats {
-  /** Images remises au traitement par le SDK. */
+  /** Images remises au traitement par la piste brute. */
   imagesReceived: number
   /** Fraction de l'image occupée par la silhouette détectée (0–1). */
   personCoverage: number
@@ -232,22 +278,26 @@ export interface VideoEffectStats {
   masksPerSecond: number
   /** Temps écoulé depuis la dernière image reçue, en millisecondes. */
   lastImageAgoMs: number | null
+  /** Largeur du flux publié, en pixels. */
+  frameWidth: number
+  /** Hauteur du flux publié, en pixels. */
+  frameHeight: number
 }
 
 export interface BackgroundBlurRenderer {
-  render: FrameRenderer
+  /** Prend le contrôle du canvas fourni par le SDK et démarre la composition. */
+  attach: (canvas: HTMLCanvasElement, track: MediaStreamTrack | null) => Promise<void>
+  /** Arrête la composition et libère l'élément vidéo (la piste reste au SDK). */
+  detach: () => void
   stats: () => VideoEffectStats
-  /** Appelé si la composition échoue durablement : l'appelant prévient l'utilisateur. */
+  /** Appelé si la composition échoue durablement. */
   onFailure?: (message: string) => void
   dispose: () => void
 }
 
 let enginePromise: Promise<SegmentationEngineConstructor> | null = null
 
-/**
- * Charge le moteur depuis notre propre origine.
- * Une seule requête, partagée entre toutes les activations.
- */
+/** Charge le moteur depuis notre propre origine. */
 function loadEngine(): Promise<SegmentationEngineConstructor> {
   const published = window.SelfieSegmentation
   if (published) return Promise.resolve(published)
@@ -289,13 +339,11 @@ function loadEngine(): Promise<SegmentationEngineConstructor> {
 }
 
 /**
- * Prépare le détourage puis renvoie la fonction de composition appliquée à
- * chaque image.
+ * Prépare le détourage puis renvoie le renderer.
  *
  * Le moteur est **vérifié avant de rendre la main** : un masque de test est
  * calculé sur une image locale. Si le WebAssembly, le graphe ou le modèle ne
- * répondent pas, l'appel échoue ici — donc visiblement — au lieu de laisser le
- * SDK retomber en silence sur la piste brute.
+ * répondent pas, l'appel échoue ici — donc visiblement.
  */
 export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRenderer> {
   const Engine = await loadEngine()
@@ -313,17 +361,19 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     throw new VideoEffectError("Le flou d'arrière-plan n'est pas disponible sur ce navigateur.")
   }
 
-  mask.width = MASK_WIDTH
-  mask.height = Math.round(MASK_WIDTH * 0.5625)
-
   const segmenter = new Engine({ locateFile: (file) => `${ENGINE_PATH}/${file}` })
   // `modelSelection: 1` = modèle « paysage », adapté à une webcam 16:9.
   segmenter.setOptions({ modelSelection: 1 })
 
+  let disposed = false
   let maskReady = false
   let segmenting = false
   let lastSegmentAt = 0
-  let disposed = false
+
+  let canvas: HTMLCanvasElement | null = null
+  let ctx: CanvasRenderingContext2D | null = null
+  let source: HTMLVideoElement | null = null
+  let timer: number | null = null
 
   let imagesReceived = 0
   let imagesBlurred = 0
@@ -338,6 +388,8 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
   let personCoverage = 0
   let maskRedMean = 0
   let maskAlphaMean = 0
+  let frameWidth = 0
+  let frameHeight = 0
 
   /** Résolution de la vérification initiale du moteur. */
   let resolveWarmup: ((ok: boolean) => void) | null = null
@@ -351,30 +403,6 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     imagesInWindow = 0
     masksInWindow = 0
     windowStartedAt = now
-  }
-
-  const renderer: BackgroundBlurRenderer = {
-    render: async () => {},
-    stats: () => ({
-      imagesReceived,
-      personCoverage,
-      maskRedMean,
-      maskAlphaMean,
-      imagesBlurred,
-      masks,
-      imagesPerSecond,
-      masksPerSecond,
-      lastImageAgoMs: lastImageAt === 0 ? null : Math.round(performance.now() - lastImageAt),
-    }),
-    dispose: () => {
-      if (disposed) return
-      disposed = true
-      resolveWarmup?.(false)
-      resolveWarmup = null
-      void segmenter.close().catch(() => {
-        // Le moteur peut déjà être arrêté : rien à signaler à l'utilisateur.
-      })
-    },
   }
 
   segmenter.onResults((results) => {
@@ -398,9 +426,6 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     maskCtx.clearRect(0, 0, mask.width, mask.height)
     maskCtx.drawImage(segmentationMask, 0, 0, mask.width, mask.height)
 
-    // MediaPipe encode la silhouette dans `[m, 0, 0, m]` : rouge et alpha sont
-    // équivalents. `applyPersonMask` produit un vrai masque d'opacité (RGB
-    // blanc, alpha = premier plan) et renvoie la couverture détectée.
     const image = maskCtx.getImageData(0, 0, mask.width, mask.height)
     const maskStats = applyPersonMask(image.data)
     personCoverage = maskStats.coverage
@@ -412,6 +437,193 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     masksInWindow += 1
     sampleRates()
   })
+
+  /** Compose une image : fond flouté + silhouette nette. */
+  const compose = () => {
+    const target = canvas
+    const context = ctx
+    if (!target || !context || !maskReady || personCoverage < MIN_PERSON_COVERAGE) return
+
+    // 1. Copie nette du premier plan, **avant** de repeindre le fond.
+    personCtx.globalCompositeOperation = 'source-over'
+    personCtx.clearRect(0, 0, person.width, person.height)
+    personCtx.drawImage(target, 0, 0, person.width, person.height)
+
+    // 2. Fond : réduction puis agrandissement lissé.
+    backdropCtx.imageSmoothingEnabled = true
+    backdropCtx.imageSmoothingQuality = 'high'
+    backdropCtx.drawImage(target, 0, 0, backdrop.width, backdrop.height)
+
+    context.save()
+    context.imageSmoothingEnabled = true
+    context.imageSmoothingQuality = 'high'
+    context.drawImage(backdrop, 0, 0, target.width, target.height)
+    context.restore()
+
+    // 3. Silhouette nette, découpée par le masque (même rapport d'image).
+    personCtx.globalCompositeOperation = 'destination-in'
+    personCtx.imageSmoothingEnabled = true
+    personCtx.filter = `blur(${FEATHER_PX}px)`
+    personCtx.drawImage(mask, 0, 0, person.width, person.height)
+    personCtx.filter = 'none'
+    personCtx.globalCompositeOperation = 'source-over'
+
+    context.drawImage(person, 0, 0, target.width, target.height)
+    imagesBlurred += 1
+    failures = 0
+  }
+
+  const tick = () => {
+    const target = canvas
+    const context = ctx
+    const element = source
+    if (disposed || !target || !context || !element) return
+    if (element.readyState < 2 || element.videoWidth === 0) return
+
+    try {
+      // Image nette de référence : la caméra, à la taille exacte du canvas.
+      context.globalCompositeOperation = 'source-over'
+      context.drawImage(element, 0, 0, target.width, target.height)
+
+      imagesReceived += 1
+      imagesInWindow += 1
+      lastImageAt = performance.now()
+      sampleRates()
+
+      const now = performance.now()
+      if (!segmenting && now - lastSegmentAt >= SEGMENT_INTERVAL_MS) {
+        segmenting = true
+        lastSegmentAt = now
+
+        workCtx.imageSmoothingEnabled = true
+        workCtx.drawImage(target, 0, 0, work.width, work.height)
+
+        void segmenter
+          .send({ image: work })
+          .catch(() => {
+            // Un échec ponctuel est ignoré : l'image suivante retente et le
+            // dernier masque reste valable.
+          })
+          .finally(() => {
+            segmenting = false
+          })
+      }
+
+      compose()
+    } catch {
+      failures += 1
+      // Le SDK n'intercepte plus rien ici : c'est à nous de prévenir.
+      if (failures >= 3) {
+        renderer.dispose()
+        renderer.onFailure?.(
+          "Le flou d'arrière-plan s'est arrêté : votre caméra est de nouveau diffusée sans effet.",
+        )
+      }
+    }
+  }
+
+  const detach = () => {
+    if (timer !== null) {
+      window.clearInterval(timer)
+      timer = null
+    }
+
+    const element = source
+    source = null
+    canvas = null
+    ctx = null
+
+    if (element) {
+      element.pause()
+      element.srcObject = null
+    }
+  }
+
+  const renderer: BackgroundBlurRenderer = {
+    attach: async (targetCanvas, track) => {
+      detach()
+      if (disposed) {
+        throw new VideoEffectError("Le flou d'arrière-plan a été interrompu pendant son démarrage.")
+      }
+      if (!track || track.readyState === 'ended') {
+        throw new VideoEffectError("Aucune piste vidéo active : le flou ne peut pas démarrer.")
+      }
+
+      // Géométrie déduite de la **piste réelle** : c'est le correctif du flux
+      // carré/rogné produit par le pipeline interne du SDK.
+      const settings = track.getSettings()
+      const size = normalizedFrameSize(settings.width ?? 0, settings.height ?? 0)
+      targetCanvas.width = size.width
+      targetCanvas.height = size.height
+
+      const context = targetCanvas.getContext('2d')
+      if (!context) {
+        throw new VideoEffectError("Le navigateur refuse le canvas vidéo nécessaire au flou.")
+      }
+
+      frameWidth = size.width
+      frameHeight = size.height
+
+      const workSize = normalizedWorkSize(size.width, size.height)
+      work.width = workSize.width
+      work.height = workSize.height
+      person.width = Math.min(workSize.width, PERSON_MAX_WIDTH)
+      person.height = Math.max(2, Math.round((person.width * size.height) / size.width))
+      backdrop.width = Math.max(16, Math.round(workSize.width / BLUR_DIVISOR))
+      backdrop.height = Math.max(16, Math.round(workSize.height / BLUR_DIVISOR))
+
+      // Le masque suit le rapport d'image de la vidéo (et non un 16:9 figé).
+      const maskSize = maskSizeFor(size.width, size.height)
+      mask.width = maskSize.width
+      mask.height = maskSize.height
+      maskReady = false
+      personCoverage = 0
+
+      const element = document.createElement('video')
+      element.muted = true
+      element.playsInline = true
+      element.autoplay = true
+      element.srcObject = new MediaStream([track])
+
+      canvas = targetCanvas
+      ctx = context
+      source = element
+
+      try {
+        await element.play()
+      } catch {
+        // Autoplay refusé : `imagesReceived` restera à 0 et l'appelant
+        // signalera explicitement l'échec plutôt que de publier du vide.
+      }
+
+      timer = window.setInterval(tick, FRAME_INTERVAL_MS)
+      tick()
+    },
+    detach,
+    stats: () => ({
+      imagesReceived,
+      personCoverage,
+      maskRedMean,
+      maskAlphaMean,
+      imagesBlurred,
+      masks,
+      imagesPerSecond,
+      masksPerSecond,
+      lastImageAgoMs: lastImageAt === 0 ? null : Math.round(performance.now() - lastImageAt),
+      frameWidth,
+      frameHeight,
+    }),
+    dispose: () => {
+      if (disposed) return
+      disposed = true
+      detach()
+      resolveWarmup?.(false)
+      resolveWarmup = null
+      void segmenter.close().catch(() => {
+        // Le moteur peut déjà être arrêté : rien à signaler à l'utilisateur.
+      })
+    },
+  }
 
   // --- Vérification initiale du moteur ------------------------------------
   await segmenter.initialize()
@@ -432,12 +644,12 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     const finish = (ok: boolean) => {
       if (settled) return
       settled = true
-      window.clearTimeout(timer)
+      window.clearTimeout(warmupTimer)
       resolveWarmup = null
       resolve(ok)
     }
 
-    const timer = window.setTimeout(() => finish(false), ENGINE_WARMUP_TIMEOUT_MS)
+    const warmupTimer = window.setTimeout(() => finish(false), ENGINE_WARMUP_TIMEOUT_MS)
     resolveWarmup = () => finish(true)
 
     void segmenter.send({ image: probe }).catch(() => finish(false))
@@ -454,115 +666,30 @@ export async function createBackgroundBlurRenderer(): Promise<BackgroundBlurRend
     )
   }
 
-  // --- Composition image par image ----------------------------------------
-  renderer.render = async (canvas, ctx) => {
-    if (disposed || canvas.width === 0 || canvas.height === 0) return
-
-    imagesReceived += 1
-    imagesInWindow += 1
-    lastImageAt = performance.now()
-    sampleRates()
-
-    try {
-      const frameWidth = canvas.width
-      const frameHeight = canvas.height
-      const workSize = normalizedWorkSize(frameWidth, frameHeight)
-      if (workSize.width === 0) return
-
-      if (work.width !== workSize.width || work.height !== workSize.height) {
-        work.width = workSize.width
-        work.height = workSize.height
-        person.width = Math.min(workSize.width, PERSON_MAX_WIDTH)
-        person.height = Math.round((person.width * frameHeight) / frameWidth)
-        backdrop.width = Math.max(16, Math.round(workSize.width / BLUR_DIVISOR))
-        backdrop.height = Math.max(16, Math.round(workSize.height / BLUR_DIVISOR))
-      }
-
-      // La silhouette est copiée **avant** de repeindre le fond : à cet instant,
-      // le canevas du SDK contient encore l'image nette de la caméra.
-      personCtx.globalCompositeOperation = 'source-over'
-      personCtx.clearRect(0, 0, person.width, person.height)
-      personCtx.drawImage(canvas, 0, 0, person.width, person.height)
-
-      // Détourage espacé : le masque précédent reste valable quelques images.
-      const now = performance.now()
-      if (!segmenting && now - lastSegmentAt >= SEGMENT_INTERVAL_MS) {
-        segmenting = true
-        lastSegmentAt = now
-        workCtx.drawImage(canvas, 0, 0, workSize.width, workSize.height)
-
-        void segmenter
-          .send({ image: work })
-          .catch(() => {
-            // Un échec ponctuel est ignoré : l'image suivante retente et le
-            // dernier masque reste valable. Après un premier masque, l'effet
-            // reste donc visible même si le moteur hoquette.
-          })
-          .finally(() => {
-            segmenting = false
-          })
-      }
-
-      // Tant qu'aucun masque n'est disponible, l'image reste nette : mieux vaut
-      // une caméra normale qu'un flou intégral pris pour un bug.
-      if (!maskReady) return
-
-      // Aucun premier plan détecté : ne rien flouter plutôt que tout flouter.
-      if (personCoverage < MIN_PERSON_COVERAGE) return
-
-      // 1. Fond : réduction puis agrandissement lissé (flou peu coûteux, sans
-      //    dépendre du filtre canvas de `ctx.filter`).
-      backdropCtx.imageSmoothingEnabled = true
-      backdropCtx.imageSmoothingQuality = 'high'
-      backdropCtx.drawImage(canvas, 0, 0, backdrop.width, backdrop.height)
-
-      ctx.save()
-      ctx.imageSmoothingEnabled = true
-      ctx.imageSmoothingQuality = 'high'
-      ctx.drawImage(backdrop, 0, 0, frameWidth, frameHeight)
-      ctx.restore()
-
-      // 2. Silhouette nette, découpée par le masque.
-      personCtx.globalCompositeOperation = 'destination-in'
-      personCtx.imageSmoothingEnabled = true
-      personCtx.filter = `blur(${FEATHER_PX}px)`
-      personCtx.drawImage(mask, 0, 0, person.width, person.height)
-      personCtx.filter = 'none'
-      personCtx.globalCompositeOperation = 'source-over'
-
-      ctx.drawImage(person, 0, 0, frameWidth, frameHeight)
-      imagesBlurred += 1
-      failures = 0
-    } catch {
-      failures += 1
-      // Le SDK intercepte les erreurs du middleware sans les remonter : c'est
-      // ici, et seulement ici, que l'utilisateur peut être prévenu.
-      if (failures >= 3) {
-        renderer.dispose()
-        renderer.onFailure?.(
-          "Le flou d'arrière-plan s'est arrêté : votre caméra est de nouveau diffusée sans effet.",
-        )
-      }
-    }
-  }
-
   return renderer
-}
-
-/**
- * Middleware **stable** : le SDK identifie un middleware par sa référence, donc
- * la même fonction doit être utilisée pour l'ajouter et le retirer.
- */
-const blurMiddleware: VideoMiddleware = () => {
-  const renderer = activeRenderer
-  if (!renderer) {
-    return Promise.reject(new Error('background-blur: no renderer prepared'))
-  }
-  return Promise.resolve(renderer.render)
 }
 
 /** Rendu actuellement rattaché au middleware (aucun si l'effet est inactif). */
 let activeRenderer: BackgroundBlurRenderer | null = null
+
+/** Accès à la piste brute publiée par le SDK, pour alimenter notre canvas. */
+let activeTrack: (() => MediaStreamTrack | null) | null = null
+
+/**
+ * Middleware **stable** : le SDK identifie un middleware par sa référence, donc
+ * la même fonction doit être utilisée pour l'ajouter et le retirer.
+ *
+ * Le SDK nous confie son canvas (`disablePerFrameCanvasRendering`) : nous le
+ * dimensionnons et nous y composons chaque image nous-mêmes.
+ */
+const blurMiddleware: VideoMiddleware = (helpers) => {
+  const renderer = activeRenderer
+  if (!renderer) {
+    return Promise.reject(new Error('background-blur: no renderer prepared'))
+  }
+
+  return renderer.attach(helpers.canvas, activeTrack?.() ?? null)
+}
 
 /** Diagnostic courant, lu par le panneau « Effets de fond ». */
 export function readVideoEffectStats(): VideoEffectStats | null {
@@ -572,7 +699,12 @@ export function readVideoEffectStats(): VideoEffectStats | null {
 /** Média minimal nécessaire pour piloter l'effet et vérifier son application. */
 type EffectMedia = Pick<
   RTKSelfMedia,
-  'addVideoMiddleware' | 'removeVideoMiddleware' | 'videoTrack' | 'rawVideoTrack' | 'videoEnabled'
+  | 'addVideoMiddleware'
+  | 'removeVideoMiddleware'
+  | 'setVideoMiddlewareGlobalConfig'
+  | 'videoTrack'
+  | 'rawVideoTrack'
+  | 'videoEnabled'
 >
 
 function safeRead<T>(read: () => T): T | null {
@@ -609,8 +741,8 @@ export async function applyVideoEffect(
 /**
  * Cœur de l'application de l'effet, avec une fabrique de rendu injectable.
  *
- * La fabrique permet de vérifier le comportement exact qui échouait en Phase
- * 2.1 : un SDK qui répond « succès » tout en republiant la piste brute.
+ * La fabrique permet de vérifier le comportement exact qui échouait : un SDK
+ * qui répond « succès » tout en republiant la piste brute.
  */
 export async function applyVideoEffectWith(
   media: EffectMedia,
@@ -622,6 +754,7 @@ export async function applyVideoEffectWith(
     await media.removeVideoMiddleware(blurMiddleware)
     activeRenderer?.dispose()
     activeRenderer = null
+    activeTrack = null
     return
   }
 
@@ -640,14 +773,35 @@ export async function applyVideoEffectWith(
   }
 
   activeRenderer = renderer
+  activeTrack = () => safeRead(() => media.rawVideoTrack) ?? null
 
   const stopAndFail = async (message: string): Promise<never> => {
     if (activeRenderer === renderer) activeRenderer = null
+    activeTrack = null
     renderer.dispose()
     await media.removeVideoMiddleware(blurMiddleware).catch(() => {
       // Idem : le retrait est un nettoyage, pas une condition de succès.
     })
     throw new VideoEffectError(message)
+  }
+
+  // Le rendu par image du SDK utilise une géométrie fausse (largeur de
+  // l'élément `<video>`, pas de la piste). Nous prenons le canvas.
+  const ownsCanvas = await media
+    .setVideoMiddlewareGlobalConfig({ disablePerFrameCanvasRendering: true })
+    .then(() => true)
+    .catch(() => false)
+
+  if (!ownsCanvas) {
+    await stopAndFail(
+      "La configuration vidéo du SDK n'a pas pu être ajustée : le flou reste désactivé et votre caméra est diffusée sans effet.",
+    )
+  }
+
+  const videoEnabled = safeRead(() => media.videoEnabled) ?? false
+  if (!videoEnabled) {
+    // Caméra coupée : le middleware démarrera à la première activation.
+    return
   }
 
   const result = await media.addVideoMiddleware(blurMiddleware)
@@ -665,9 +819,6 @@ export async function applyVideoEffectWith(
   // Le SDK applique un middleware en silence : si la fabrication échoue, il
   // republie la piste brute tout en répondant `success: true`. On vérifie donc
   // que la piste publiée n'est plus la piste d'origine.
-  const videoEnabled = safeRead(() => media.videoEnabled) ?? false
-  if (!videoEnabled) return
-
   const published = safeRead(() => media.videoTrack)
   const raw = safeRead(() => media.rawVideoTrack)
 

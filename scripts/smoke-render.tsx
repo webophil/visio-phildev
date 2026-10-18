@@ -29,7 +29,9 @@ import {
   applyVideoEffect,
   applyVideoEffectWith,
   maskOpacity,
+  maskSizeFor,
   maskValueForPixel,
+  normalizedFrameSize,
   normalizedWorkSize,
   readVideoEffectStats,
 } from '../src/media/backgroundBlur'
@@ -189,6 +191,21 @@ checks.push({
     expect(odd.width % 2 === 0 && odd.height % 2 === 0, 'dimensions paires (pas de couture)')
     expect(normalizedWorkSize(0, 0).width === 0, 'image absente → aucun traitement')
 
+    // Géométrie du flux publié : déduite de la piste, rapport d'image conservé.
+    const hd = normalizedFrameSize(1280, 720)
+    expect(hd.width === 1280 && hd.height === 720, '1280×720 conservé')
+    const uhd = normalizedFrameSize(2560, 1440)
+    expect(uhd.width === 1280 && uhd.height === 720, '1440p ramené à 1280×720')
+    const vga = normalizedFrameSize(640, 480)
+    expect(vga.width === 640 && vga.height === 480, '640×480 conservé')
+    expect(normalizedFrameSize(0, 0).width === 1280, 'taille inconnue → valeur sûre')
+
+    // Le masque suit le rapport d'image de la vidéo, jamais un 16:9 figé.
+    const wideMask = maskSizeFor(1280, 720)
+    expect(wideMask.width === 160 && wideMask.height === 90, 'masque 16:9 pour une vidéo 16:9')
+    const squareMask = maskSizeFor(1000, 1000)
+    expect(squareMask.width === 160 && squareMask.height === 160, 'masque carré pour une vidéo carrée')
+
     // Le moteur doit être servi par l'application : jamais un CDN.
     expect(
       BLUR_ENGINE_SCRIPT_URL.startsWith('/vendor/mediapipe/selfie_segmentation/'),
@@ -280,10 +297,14 @@ checks.push({
       const processed = { id: 'processed-track' } as unknown as MediaStreamTrack
       let applied = false
       let removals = 0
+      let ownsCanvas = false
 
       return {
         media: {
           videoEnabled: true,
+          async setVideoMiddlewareGlobalConfig(config: { disablePerFrameCanvasRendering: boolean }) {
+            ownsCanvas = config.disablePerFrameCanvasRendering === true
+          },
           get videoTrack() {
             return applied && !silentFallback ? processed : raw
           },
@@ -301,11 +322,13 @@ checks.push({
           },
         },
         removals: () => removals,
+        ownsCanvas: () => ownsCanvas,
       }
     }
 
     const createFakeRenderer = async () => ({
-      render: async () => {},
+      attach: async () => {},
+      detach: () => {},
       stats: () => ({
         imagesReceived: 3,
         personCoverage: 0.4,
@@ -316,6 +339,8 @@ checks.push({
         imagesPerSecond: 20,
         masksPerSecond: 14,
         lastImageAgoMs: 50,
+        frameWidth: 1280,
+        frameHeight: 720,
       }),
       dispose: () => {},
     })
@@ -342,6 +367,10 @@ checks.push({
     const working = createFakeMedia(false)
     await applyVideoEffectWith(working.media, 'blur', createFakeRenderer)
     expect(readVideoEffectStats()?.imagesBlurred === 3, 'compteurs de traitement exposés')
+    expect(
+      working.ownsCanvas(),
+      'le canvas est piloté par le traitement (géométrie de la piste)',
+    )
     await applyVideoEffect(working.media, 'none')
     expect(readVideoEffectStats() === null, '« Aucun effet » libère le traitement')
     expect(working.removals() === 1, 'middleware retiré explicitement')

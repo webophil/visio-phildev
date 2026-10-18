@@ -137,6 +137,22 @@ point d'accroche qui est utilisé (`src/media/backgroundBlur.ts`) :
 3. la piste audio et le partage d'écran ne sont jamais touchés, et **aucune seconde capture** de la
    caméra n'est ouverte : le SDK reste propriétaire de la piste.
 
+### Géométrie du flux — cause d'un défaut corrigé
+
+Le rendu par image du SDK dimensionne son canvas avec la **largeur de l'élément `<video>`** qu'il crée
+(`canvas.height = video.width || settings.height`), pas avec la taille de la piste. Le flux publié
+devenait carré, puis rogné par l'affichage (`object-cover`) : on ne voyait plus qu'une bande
+horizontale du visage.
+
+Le traitement prend donc le canvas en main (`setVideoMiddlewareGlobalConfig({
+  disablePerFrameCanvasRendering: true })`) et compose lui-même chaque image, à la taille réelle de la
+piste (plafonnée à 1280 px de large, rapport conservé). Le masque de détourage suit le rapport
+d'image de cette image — auparavant figé en 16:9, il était étiré sur une vidéo carrée et ne
+correspondait plus à la silhouette.
+
+Le panneau affiche la taille réellement publiée (`flux 1280×720`) : c'est la valeur à vérifier en
+premier si l'image paraît déformée.
+
 ### Lecture du masque — cause d'un défaut corrigé
 
 MediaPipe n'encode **pas** son masque en niveaux de gris opaques : le convertisseur GPU écrit
