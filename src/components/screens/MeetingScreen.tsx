@@ -1,17 +1,7 @@
 import { RealtimeKitProvider } from '@cloudflare/realtimekit-react'
-import {
-  Clock,
-  Crown,
-  Info,
-  Loader2,
-  ShieldCheck,
-  Users,
-  Wifi,
-  WifiOff,
-} from 'lucide-react'
+import { Clock, Crown, Loader2, Users, Wifi, WifiOff } from 'lucide-react'
 
 import { PhilDevLogo } from '../Brand/PhilDevLogo'
-import { BackgroundEffectsPanel } from '../meeting/BackgroundEffectsPanel'
 import { ChatPanel } from '../meeting/ChatPanel'
 import { ControlBar } from '../meeting/ControlBar'
 import { InviteLinkButton } from '../meeting/InviteLinkButton'
@@ -22,7 +12,6 @@ import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { StatusPill } from '../ui/StatusPill'
 import { formatDuration, pluralize } from '../../lib/format'
-import { NOTICES } from '../../lib/notices'
 import { useMeeting } from '../../state/meetingContext'
 
 /**
@@ -44,7 +33,7 @@ export function MeetingScreen() {
 }
 
 function MeetingLayout() {
-  const { meetingName, meetingId, durationMs, activePanel, closePanel, transport, session, isHost, clearSessionError } =
+  const { meetingName, durationMs, activePanel, closePanel, transport, session, isHost, clearSessionError } =
     useMeeting()
 
   const participantCount = session.participants.length
@@ -68,10 +57,7 @@ function MeetingLayout() {
         <div className="flex min-w-0 items-center gap-3.5">
           <PhilDevLogo size="sm" />
           <span aria-hidden="true" className="hidden h-6 w-px bg-ink-700 sm:block" />
-          <div className="flex min-w-0 flex-col">
-            <h1 className="truncate text-sm font-semibold text-white">{meetingName}</h1>
-            <p className="truncate font-mono text-[11px] text-slate-500">/rdv-{meetingId}</p>
-          </div>
+          <h1 className="truncate text-sm font-semibold text-white">{meetingName}</h1>
         </div>
 
         <div className="flex flex-wrap items-center gap-2">
@@ -137,20 +123,9 @@ function MeetingLayout() {
 
         {activePanel === 'participants' ? <ParticipantsPanel /> : null}
         {activePanel === 'chat' ? <ChatPanel /> : null}
-        {activePanel === 'effects' ? <BackgroundEffectsPanel /> : null}
+        {/* Panneau « Effets » provisoirement masqué : le composant et le moteur
+            de flou restent en place, seule son ouverture est retirée. */}
       </main>
-
-      <footer className="flex shrink-0 flex-col gap-2 px-4 pb-4 sm:px-6">
-        <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
-          <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-slate-500" />
-          {NOTICES.capacity}
-        </p>
-        <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-500">
-          <ShieldCheck aria-hidden="true" className="mt-0.5 size-3.5 shrink-0" />
-          Votre flux audio et vidéo est transmis aux participants de cette réunion via Cloudflare
-          RealtimeKit. Il n’est ni enregistré ni conservé par l’application.
-        </p>
-      </footer>
 
       {activePanel ? (
         <button

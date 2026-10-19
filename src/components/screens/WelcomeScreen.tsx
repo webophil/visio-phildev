@@ -6,7 +6,6 @@ import {
   Link2,
   Loader2,
   MonitorUp,
-  ShieldCheck,
   UserRound,
   Video,
 } from 'lucide-react'
@@ -20,7 +19,6 @@ import { TextField } from '../ui/TextField'
 import { parseMeetingLink } from '../../lib/format'
 import type { MeetingLink } from '../../lib/format'
 import { DEFAULT_MEETING_TITLE, MAX_MEETING_TITLE_LENGTH } from '../../lib/meetingTitle'
-import { NOTICES } from '../../lib/notices'
 import { readHostSession } from '../../meeting/hostSession'
 import { checkApiAvailability } from '../../meeting/rtkApi'
 import { useCreateMeeting } from '../../meeting/useCreateMeeting'
@@ -28,21 +26,19 @@ import { useCreateMeeting } from '../../meeting/useCreateMeeting'
 const CAPABILITIES = [
   {
     icon: Video,
-    title: 'Visioconférence réelle',
-    description:
-      'Audio et vidéo transitent par Cloudflare RealtimeKit : deux navigateurs distants se voient et se parlent vraiment.',
+    title: 'Échange en visio',
+    description: 'Retrouvez-vous en audio et en vidéo pour votre rendez-vous à distance.',
   },
   {
     icon: MonitorUp,
-    title: "Partage d'écran natif",
-    description:
-      'Écran, fenêtre ou onglet : le navigateur propose les sources disponibles, et les autres participants les voient.',
+    title: 'Partage d’écran',
+    description: 'Présentez un document, une page web ou une application pendant l’échange.',
   },
   {
-    icon: ShieldCheck,
-    title: 'Sans compte pour les invités',
+    icon: Link2,
+    title: 'Accès simple',
     description:
-      "Un lien suffit : les invités saisissent leur nom et rejoignent la salle depuis leur navigateur.",
+      'Un lien d’invitation suffit pour rejoindre la réunion depuis votre navigateur.',
   },
 ] as const
 
@@ -91,8 +87,8 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
     if (!link) {
       setError(
         value.trim().length === 0
-          ? 'Collez le lien d’invitation reçu (ex. …/rdv-aurore?r=…).'
-          : "Ce lien n'est pas valide. Attendu : une adresse terminée par /rdv-…, éventuellement suivie de ?r=.",
+          ? 'Collez le lien d’invitation reçu pour rejoindre votre rendez-vous.'
+          : "Ce lien n’est pas valide. Vérifiez que vous avez copié l’adresse complète reçue de l’organisateur.",
       )
       return
     }
@@ -126,19 +122,18 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-10 px-5 pb-12 sm:px-8 lg:flex-row lg:items-start lg:gap-14 lg:pt-6">
         <section className="flex flex-1 flex-col gap-6">
           <p className="text-sm font-medium tracking-[0.18em] text-accent-300 uppercase">
-            Visioconférence pour vos rendez-vous clients
+            Espace de rendez-vous PhilDEV
           </p>
 
           <h1 className="font-display text-4xl leading-[1.08] font-semibold tracking-tight text-white sm:text-5xl lg:text-6xl">
-            Vos rendez-vous,
+            Bienvenue sur votre
             <br />
-            simplement.
+            rendez-vous visio.
           </h1>
 
           <p className="max-w-xl text-base leading-relaxed text-slate-300">
-            PhilDEV Visio réunit vos échanges clients et le suivi de votre stagiaire dans un espace
-            unique, sans installation et sans création de compte pour les invités. Les échanges
-            audio et vidéo passent par Cloudflare RealtimeKit.
+            Cet espace vous permet de démarrer ou de rejoindre une réunion en toute simplicité.
+            Aucune installation ni création de compte n’est nécessaire pour les invités.
           </p>
 
           <dl className="mt-2 grid gap-4 sm:grid-cols-3">
@@ -166,9 +161,9 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
           </div>
 
           {apiAvailable === false ? (
-            <Notice tone="warning" title="Service de réunion injoignable">
-              L’API de réunion répond uniquement depuis la prévisualisation déployée. Ouverte en
-              développement local, cette page ne peut ni créer ni rejoindre de réunion.
+            <Notice tone="warning" title="Service de réunion indisponible">
+              Cette page ne peut pas créer ni rejoindre de réunion pour le moment. Ouvrez
+              l’adresse habituelle du service pour accéder à votre rendez-vous.
             </Notice>
           ) : null}
 
@@ -184,7 +179,7 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
             value={title}
             maxLength={MAX_MEETING_TITLE_LENGTH}
             autoComplete="off"
-            hint={`Affiché à tous les participants. Laissez vide pour « ${DEFAULT_MEETING_TITLE} ».`}
+            hint="Ce nom sera visible par les participants. Si vous laissez ce champ vide, un nom par défaut sera utilisé."
             onChange={(event) => setTitle(event.target.value)}
             onBlur={() => {
               // Un champ vide revient au nom par défaut : le nom transmis reste
@@ -217,7 +212,7 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
           >
             <TextField
               label="Lien d’invitation"
-              placeholder="https://…/rdv-aurore?r=…"
+              placeholder="https://…"
               value={value}
               error={error}
               autoComplete="off"
@@ -238,13 +233,14 @@ export function WelcomeScreen({ onJoinMeeting }: WelcomeScreenProps) {
 
           <Notice tone="info" title="Invités" className="text-xs">
             <UserRound aria-hidden="true" className="mr-1.5 inline size-3.5 align-[-2px]" />
-            {NOTICES.inviteLink}
+            Toute personne disposant du lien peut rejoindre la réunion. Aucun compte n’est
+            nécessaire côté invité.
           </Notice>
         </section>
       </main>
 
       <footer className="mx-auto w-full max-w-6xl px-5 pb-8 text-xs text-slate-500 sm:px-8">
-        <p>PhilDEV Visio · Cloudflare RealtimeKit — cible : visio.phildev.online</p>
+        <p>PhilDEV Visio — espace de rendez-vous</p>
       </footer>
 
       <HostAccessDialog

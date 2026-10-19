@@ -9,7 +9,6 @@ import {
   Users,
   Video,
   VideoOff,
-  WandSparkles,
 } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 
@@ -84,7 +83,8 @@ export function ControlBar() {
 
       {panelButton('participants', 'Participants', Users, String(participantCount))}
       {panelButton('chat', 'Chat', MessageSquare)}
-      {panelButton('effects', 'Effets', WandSparkles)}
+      {/* « Effets » provisoirement masqué : le moteur MediaPipe et son panneau
+          restent dans le code, seule l’entrée de la barre est retirée. */}
 
       <span aria-hidden="true" className="mx-1 hidden h-10 w-px bg-ink-700 sm:block" />
 

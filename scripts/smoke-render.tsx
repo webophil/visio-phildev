@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { RTKSelf } from '@cloudflare/realtimekit'
 
 import { ChatPanel } from '../src/components/meeting/ChatPanel'
+import { ParticipantsPanel } from '../src/components/meeting/ParticipantsPanel'
 import { MeetingStage } from '../src/components/meeting/MeetingStage'
 import {
   RemoteScreenShare,
@@ -23,6 +24,7 @@ import {
 } from '../src/components/meeting/layout'
 import { MeetingContext } from '../src/state/meetingContext'
 import type { MeetingContextValue } from '../src/state/meetingContext'
+import { MeetingScreen } from '../src/components/screens/MeetingScreen'
 import { UnknownRouteScreen } from '../src/components/screens/UnknownRouteScreen'
 import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
 import { remoteAudioTracks } from '../src/media/remoteAudio'
@@ -526,7 +528,7 @@ checks.push({
     )
 
     const gridIndex = stageHtml.indexOf('stage-area')
-    const bannerIndex = stageHtml.indexOf('Personne n’a encore rejoint')
+    const bannerIndex = stageHtml.indexOf('En attente des participants')
     expect(gridIndex > 0, 'scène rendue avec son cadre mesuré')
     expect(bannerIndex > 0 && bannerIndex < gridIndex, 'l’attente est rendue hors de la grille')
     expect(
@@ -681,7 +683,7 @@ checks.push({
     expect(mediaFailure('no-device').title.includes('Aucun périphérique'), 'matériel absent expliqué')
 
     expect(
-      describeChatError({ code: '1101' }).includes('autorise pas'),
+      describeChatError({ code: '1101' }).includes('autorisé à envoyer'),
       'chat refusé par le profil expliqué',
     )
     expect(describeChatError({ code: '0013' }).includes('Trop de messages'), 'limite de débit expliquée')
@@ -797,7 +799,15 @@ checks.push({
   name: 'écran d’accueil',
   run: () => {
     const html = renderToStaticMarkup(<WelcomeScreen onJoinMeeting={() => {}} />)
-    expect(html.includes('Vos rendez-vous,'), 'slogan présent')
+    expect(html.includes('Bienvenue sur votre'), 'titre d’accueil présent')
+    expect(html.includes('rendez-vous visio'), 'titre d’accueil complet')
+    expect(html.includes('Espace de rendez-vous PhilDEV'), 'sur-titre d’accueil')
+    expect(html.includes('Échange en visio'), 'carte « échange en visio »')
+    expect(html.includes('Partage d’écran'), 'carte « partage d’écran »')
+    expect(html.includes('Accès simple'), 'carte « accès simple »')
+    expect(html.includes('espace de rendez-vous'), 'footer discret')
+    expect(!html.includes('RealtimeKit'), 'aucune mention technique visible')
+    expect(!html.includes('visio.phildev.online'), 'aucune cible de déploiement affichée')
     expect(html.includes('Créer une réunion'), 'bouton de création')
     expect(html.includes('Rejoindre'), 'bouton rejoindre')
     expect(html.includes('Lien d’invitation'), 'champ de lien')
@@ -808,6 +818,191 @@ checks.push({
     expect(html.includes('Visio'), 'marque Visio')
     expect(html.includes('lang="fr"') === false, 'aucun attribut parasite')
     expect(html.length > 2000, 'markup non trivial')
+  },
+})
+
+checks.push({
+  name: 'salle de réunion',
+  run: () => {
+    const remote = (index: number) => ({
+      id: `invite-${index}`,
+      name: `Invité ${index}`,
+      videoEnabled: true,
+      audioEnabled: true,
+      isHost: false,
+      screenShareEnabled: false,
+      screenShareTracks: null,
+      audioTrack: null,
+      registerVideoElement: () => {},
+      deregisterVideoElement: () => {},
+      on: () => {},
+      removeListener: () => {},
+    })
+
+    const renderRoom = (remoteCount: number) => {
+      const remotes = Array.from({ length: remoteCount }, (_, index) => remote(index + 1))
+      const roomClient = {
+        self: {
+          videoEnabled: true,
+          audioEnabled: true,
+          screenShareEnabled: false,
+          registerVideoElement: () => {},
+          deregisterVideoElement: () => {},
+        },
+        participants: {
+          joined: { toArray: () => remotes, on: () => {}, removeListener: () => {} },
+        },
+      } as unknown as RTKClient
+
+      const roomContext = {
+        meetingId: 'aurore',
+        meetingName: 'Rendez-vous Aurore',
+        realtimeKitId: UUID,
+        durationMs: 3_725_000,
+        activePanel: null,
+        session: {
+          participants: [{ id: 'self' }, ...remotes.map((participant) => ({ id: participant.id }))],
+          error: null,
+        },
+        transport: { mode: 'realtimekit', connection: 'connected', supportsRemoteParticipants: true },
+        participantName: 'Aurore',
+        setScreenShareEnabled: async () => {},
+        isHost: true,
+        clearSessionError: () => {},
+        leaveMeeting: async () => {},
+        setMicrophoneEnabled: async () => {},
+        setCameraEnabled: async () => {},
+        client: roomClient,
+      } as unknown as MeetingContextValue
+
+      return renderToStaticMarkup(
+        <MeetingContext.Provider value={roomContext}>
+          <MeetingScreen />
+        </MeetingContext.Provider>,
+      )
+    }
+
+    // `buildInvitationUrl` lit l'origine du navigateur au rendu : un substitut
+    // minimal suffit pour le rendu serveur du test.
+    const scope = globalThis as unknown as { window?: unknown }
+    const previousWindow = scope.window
+    scope.window = { location: { origin: 'https://visio.test' } }
+
+    try {
+      const waiting = renderRoom(0)
+      expect(waiting.includes('Rendez-vous Aurore'), 'nom de réunion affiché')
+      expect(waiting.includes('Organisateur'), 'statut organisateur')
+      expect(waiting.includes('Copier le lien'), 'bouton de copie du lien')
+      expect(waiting.includes('Participants') && waiting.includes('Chat'), 'commandes conservées')
+      expect(waiting.includes('Quitter'), 'commande de sortie conservée')
+      expect(!waiting.includes('/>rdv-') && !waiting.includes('>/rdv-'), 'aucun identifiant technique dans l’en-tête')
+      expect(!waiting.includes('cinq personnes'), 'aucune limite de participants dans le pied de page')
+      expect(!waiting.includes('contrôle est effectué côté serveur'), 'aucune explication de contrôle serveur')
+      expect(!waiting.includes('Cloudflare'), 'aucune mention technique dans la salle')
+      expect(!waiting.includes('Effets'), 'bouton « Effets » masqué')
+      expect(waiting.includes('En attente des participants'), 'bandeau d’attente simplifié')
+      expect(
+        waiting.includes('Partagez le lien de réunion pour les inviter.'),
+        'invitation à partager le lien',
+      )
+
+      const joined = renderRoom(1)
+      expect(!joined.includes('En attente des participants'), 'le bandeau disparaît dès qu’un invité rejoint')
+    } finally {
+      if (previousWindow === undefined) delete scope.window
+      else scope.window = previousWindow
+    }
+  },
+})
+
+checks.push({
+  name: 'panneau de chat',
+  run: () => {
+    const renderChat = (available: boolean) => {
+      const context = {
+        closePanel: () => {},
+        chat: {
+          available,
+          canSend: available,
+          sending: false,
+          error: null,
+          unavailableReason: available
+            ? null
+            : 'Les messages écrits ne sont pas activés pour cette réunion. L’organisateur peut les autoriser.',
+          maxTextLength: 500,
+          messages: [],
+        },
+        sendChatMessage: async () => true,
+      } as unknown as MeetingContextValue
+
+      return renderToStaticMarkup(
+        <MeetingContext.Provider value={context}>
+          <ChatPanel />
+        </MeetingContext.Provider>,
+      )
+    }
+
+    const empty = renderChat(true)
+    expect(empty.includes('Chat'), 'titre du panneau')
+    expect(empty.includes('Aucun message'), 'état vide lisible')
+    expect(empty.includes('Écrire un message…'), 'champ de saisie disponible')
+    expect(empty.includes('Entrée pour envoyer'), 'aide d’envoi simplifiée')
+    expect(!empty.includes('caractères.'), 'compteur de caractères retiré de l’aide')
+    expect(
+      empty.includes('Les messages ne sont pas conservés après la réunion.'),
+      'mention discrète de conservation',
+    )
+    expect(!empty.includes('Messages non conservés'), 'encadré de conservation retiré')
+
+    const blocked = renderChat(false)
+    expect(blocked.includes('Chat indisponible'), 'état indisponible annoncé')
+    expect(
+      blocked.includes('L’organisateur peut les autoriser'),
+      'raison de l’indisponibilité compréhensible',
+    )
+
+    const visible = `${empty}${blocked}`
+    expect(!visible.includes('Cloudflare'), 'aucune mention de Cloudflare')
+    expect(!visible.includes('RealtimeKit'), 'aucune mention de RealtimeKit')
+    expect(!visible.includes('SDK'), 'aucune mention du SDK')
+    expect(!visible.includes('profil de participant'), 'aucun jargon de profil de participant')
+  },
+})
+
+checks.push({
+  name: 'panneau des participants',
+  run: () => {
+    const context = {
+      closePanel: () => {},
+      session: {
+        maxParticipants: 5,
+        participants: [
+          {
+            id: 'self',
+            name: 'Aurore',
+            isHost: true,
+            isLocal: true,
+            audioEnabled: true,
+            videoEnabled: false,
+            screenShareEnabled: false,
+          },
+        ],
+      },
+    } as unknown as MeetingContextValue
+
+    const html = renderToStaticMarkup(
+      <MeetingContext.Provider value={context}>
+        <ParticipantsPanel />
+      </MeetingContext.Provider>,
+    )
+
+    expect(html.includes('Participants'), 'titre du panneau')
+    expect(html.includes('1 participant sur 5'), 'compteur de participants conservé')
+    expect(html.includes('En attente des invités…'), 'message d’attente simplifié')
+    expect(html.includes('Aurore'), 'nom du participant affiché')
+    expect(html.includes('Micro actif') && html.includes('Caméra coupée'), 'indicateurs média conservés')
+    expect(!html.includes('Capacité de la réunion'), 'encadré de capacité retiré')
+    expect(!html.includes('contrôle est effectué côté serveur'), 'aucune explication de contrôle serveur')
   },
 })
 

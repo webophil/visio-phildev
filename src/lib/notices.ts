@@ -24,9 +24,9 @@ export const NOTICES = {
     "Votre écran est transmis à tous les participants. Votre caméra reste visible en vignette pendant le partage.",
 
   /** Chat */
-  chat: "Les messages passent par la messagerie de la réunion Cloudflare RealtimeKit. Ils ne sont ni enregistrés ni relus après la réunion : aucun historique n'est conservé par l'application.",
+  chat: "Les messages ne sont pas conservés après la réunion.",
   chatUnavailable:
-    "Le profil de participant de cette réunion n'autorise pas les messages écrits. L'organisateur peut l'activer dans le tableau de bord Cloudflare RealtimeKit.",
+    "Les messages écrits ne sont pas activés pour cette réunion. L’organisateur peut les autoriser.",
 
   /** Effets de fond */
   backgroundEffects:

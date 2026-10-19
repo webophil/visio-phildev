@@ -561,8 +561,7 @@ function readChatPermissions(
       return {
         available: false,
         canSend: false,
-        unavailableReason:
-          "Le profil de participant de cette réunion ne communique pas ses droits de messagerie.",
+        unavailableReason: "La messagerie n’est pas disponible pour le moment.",
       }
     }
 
@@ -571,7 +570,7 @@ function readChatPermissions(
         available: false,
         canSend: false,
         unavailableReason:
-          "Le profil de participant de cette réunion n'autorise pas les messages écrits. L'organisateur peut l'activer dans le tableau de bord Cloudflare RealtimeKit.",
+          "Les messages écrits ne sont pas activés pour cette réunion. L’organisateur peut les autoriser.",
       }
     }
 
@@ -580,13 +579,13 @@ function readChatPermissions(
       canSend: chat.canSend,
       unavailableReason: chat.canSend
         ? null
-        : "Votre profil de participant permet de lire les messages, mais pas d'en envoyer.",
+        : "Vous pouvez lire les messages, mais l’envoi n’est pas autorisé dans cette réunion.",
     }
   } catch {
     return {
       available: false,
       canSend: false,
-      unavailableReason: "Les droits de messagerie de cette réunion n'ont pas pu être lus.",
+      unavailableReason: "La messagerie n’est pas disponible pour le moment.",
     }
   }
 }

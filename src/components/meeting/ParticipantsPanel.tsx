@@ -1,8 +1,6 @@
 import { Crown, Mic, MicOff, MonitorUp, Users, Video, VideoOff } from 'lucide-react'
 
-import { Notice } from '../ui/Notice'
 import { SidePanel } from '../ui/SidePanel'
-import { NOTICES } from '../../lib/notices'
 import { pluralize } from '../../lib/format'
 import { useMeeting } from '../../state/meetingContext'
 import type { ParticipantView } from '../../types/meeting'
@@ -32,18 +30,11 @@ export function ParticipantsPanel() {
         </ul>
 
         {participants.length <= 1 ? (
-          <div className="flex items-start gap-2 rounded-xl border border-dashed border-ink-600 p-3 text-xs text-slate-400">
-            <Users aria-hidden="true" className="mt-0.5 size-4 shrink-0" />
-            <p>
-              Vous êtes seul pour l’instant. Chaque personne qui ouvre le lien d’invitation apparaît
-              ici dès qu’elle rejoint la salle.
-            </p>
+          <div className="flex items-center gap-2 rounded-xl border border-dashed border-ink-600 p-3 text-xs text-slate-400">
+            <Users aria-hidden="true" className="size-4 shrink-0" />
+            <p>En attente des invités…</p>
           </div>
         ) : null}
-
-        <Notice tone="info" title="Capacité de la réunion">
-          {NOTICES.capacity}
-        </Notice>
       </div>
     </SidePanel>
   )

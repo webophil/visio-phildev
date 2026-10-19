@@ -4,14 +4,13 @@ import {
   ChevronLeft,
   Crown,
   Loader2,
-  Lock,
   Mic,
   MicOff,
   RefreshCw,
   UserRound,
+  Users,
   Video,
   VideoOff,
-  Wifi,
 } from 'lucide-react'
 
 import { PhilDevLogo } from '../Brand/PhilDevLogo'
@@ -37,7 +36,6 @@ export interface PreJoinScreenProps {
 export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
   const {
     meetingName,
-    meetingId,
     participantName,
     setParticipantName,
     media,
@@ -48,7 +46,6 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
     toggleAudio,
     toggleVideo,
     isHost,
-    session,
   } = useMeeting()
 
   const [nameError, setNameError] = useState<string | null>(null)
@@ -95,19 +92,14 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
           <PhilDevLogo size="sm" />
         </div>
 
-        <div className="flex items-center gap-2">
-          <StatusPill tone="info" icon={<Wifi aria-hidden="true" className="size-3.5" />}>
-            Cloudflare RealtimeKit
+        {isHost ? (
+          <StatusPill
+            tone="neutral"
+            icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}
+          >
+            Organisateur
           </StatusPill>
-          {isHost ? (
-            <StatusPill
-              tone="neutral"
-              icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}
-            >
-              Organisateur
-            </StatusPill>
-          ) : null}
-        </div>
+        ) : null}
       </header>
 
       <main className="mx-auto flex w-full max-w-6xl flex-1 flex-col gap-6 px-5 pb-10 sm:px-8">
@@ -116,10 +108,7 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
             Rejoindre « {meetingName} »
           </h1>
           <p className="text-sm text-slate-400">
-            Vérifiez votre matériel avant d&apos;entrer. Identifiant de la salle :
-            <span className="ml-1.5 rounded-md bg-ink-850 px-1.5 py-0.5 font-mono text-xs text-accent-200">
-              /rdv-{meetingId}
-            </span>
+            Vérifiez votre caméra et votre microphone avant de rejoindre la réunion.
           </p>
         </div>
 
@@ -334,15 +323,11 @@ export function PreJoinScreen({ onBack }: PreJoinScreenProps) {
                 {busy ? 'Connexion…' : 'Rejoindre la réunion'}
               </Button>
 
-              <p className="flex items-start gap-1.5 text-xs leading-relaxed text-slate-400">
-                <Lock aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-slate-500" />
-                {NOTICES.capacity}
-              </p>
-
-              <p className="text-xs leading-relaxed text-slate-500">
-                {session.maxParticipants > 0
-                  ? `Cette réunion accepte ${session.maxParticipants} personnes au maximum.`
-                  : 'Votre nom et votre matériel seront transmis aux participants de la réunion.'}
+              {/* Capacité réelle de la réunion : le plafond est contrôlé côté
+                  serveur, l'interface se contente de l'indiquer. */}
+              <p className="flex items-center gap-1.5 text-xs text-slate-500">
+                <Users aria-hidden="true" className="size-3.5 shrink-0" />
+                Jusqu’à 5 participants
               </p>
             </div>
           </section>

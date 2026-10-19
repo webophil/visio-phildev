@@ -113,10 +113,8 @@ export function MeetingStage() {
       {remotes.length === 0 ? (
         <div className={WAITING_BANNER_CLASS} role="status">
           <MonitorUp aria-hidden="true" className="size-4 shrink-0 text-slate-500" />
-          <p className="text-sm font-medium text-slate-300">Personne n’a encore rejoint</p>
           <p className="min-w-0 flex-1 text-xs leading-relaxed text-slate-400">
-            Partagez le lien d’invitation : les participants apparaîtront ici dès qu’ils seront
-            connectés.
+            En attente des participants… Partagez le lien de réunion pour les inviter.
           </p>
         </div>
       ) : null}

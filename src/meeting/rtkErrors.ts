@@ -76,7 +76,7 @@ export function describeChatError(error: unknown): string {
   const clientCode = readClientCode(error)
 
   if (clientCode === '0101' || clientCode === '1101') {
-    return "Votre profil de participant n'autorise pas l'envoi de messages dans cette réunion."
+    return "Vous n’êtes pas autorisé à envoyer des messages dans cette réunion."
   }
   if (clientCode === '0013') {
     return 'Trop de messages envoyés en peu de temps. Patientez quelques instants.'
