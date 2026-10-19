@@ -1,6 +1,6 @@
 import { useEffect, useRef, useState } from 'react'
 import type { FormEvent } from 'react'
-import { MessageSquare, Send, ShieldOff } from 'lucide-react'
+import { MessageSquare, Send } from 'lucide-react'
 
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
@@ -13,11 +13,10 @@ import type { ChatMessageView } from '../../types/meeting'
 /**
  * Messagerie de réunion.
  *
- * Le panneau est branché sur la **messagerie native** de Cloudflare RealtimeKit :
- * les messages circulent entre les participants connectés et ne sont ni
- * enregistrés ni relus après la réunion. Quand le profil de participant
- * n'autorise pas le chat, le panneau l'annonce explicitement et conserve un
- * champ désactivé plutôt que d'afficher une saisie sans effet.
+ * Les messages circulent entre les participants connectés et ne sont ni
+ * enregistrés ni relus après la réunion. Quand l'envoi n'est pas autorisé, le
+ * panneau l'annonce explicitement et conserve un champ désactivé plutôt que
+ * d'afficher une saisie sans effet.
  */
 export function ChatPanel() {
   const { closePanel, chat, sendChatMessage } = useMeeting()
@@ -76,25 +75,14 @@ export function ChatPanel() {
           </div>
 
           <p className="text-[11px] leading-relaxed text-slate-500">
-            {canWrite
-              ? `Entrée pour envoyer · ${draft.length}/${chat.maxTextLength} caractères.`
-              : 'La saisie est désactivée : aucun message ne peut être envoyé.'}
+            {canWrite ? 'Entrée pour envoyer' : 'La saisie est désactivée : aucun message ne peut être envoyé.'}
           </p>
         </form>
       }
     >
       <div className="flex h-full flex-col gap-3">
         {chat.available ? null : (
-          <Notice
-            tone="warning"
-            title="Chat indisponible"
-            action={
-              <span className="flex items-center gap-1.5 text-[11px] text-slate-400">
-                <ShieldOff aria-hidden="true" className="size-3.5" />
-                Profil de participant
-              </span>
-            }
-          >
+          <Notice tone="warning" title="Chat indisponible">
             {chat.unavailableReason ?? NOTICES.chatUnavailable}
           </Notice>
         )}
@@ -109,11 +97,11 @@ export function ChatPanel() {
           <div className="flex flex-1 flex-col items-center justify-center gap-3 rounded-xl border border-dashed border-ink-600 px-4 py-10 text-center">
             <MessageSquare aria-hidden="true" className="size-6 text-slate-500" />
             <p className="text-sm font-medium text-slate-300">Aucun message</p>
-            <p className="max-w-xs text-xs leading-relaxed text-slate-500">
-              {chat.available
-                ? 'Les messages apparaissent ici dès qu’un participant écrit. Ils ne sont pas conservés après la réunion.'
-                : 'Ce panneau restera vide tant que le chat n’est pas autorisé pour votre profil.'}
-            </p>
+            {chat.available ? null : (
+              <p className="max-w-xs text-xs leading-relaxed text-slate-500">
+                Ce panneau restera vide tant que les messages ne sont pas autorisés.
+              </p>
+            )}
           </div>
         ) : (
           <div
@@ -129,9 +117,7 @@ export function ChatPanel() {
           </div>
         )}
 
-        <Notice tone="info" title="Messages non conservés" className="text-xs">
-          {NOTICES.chat}
-        </Notice>
+        <p className="text-[11px] leading-relaxed text-slate-500">{NOTICES.chat}</p>
       </div>
     </SidePanel>
   )

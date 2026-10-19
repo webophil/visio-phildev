@@ -109,7 +109,7 @@ export function HostAccessDialog({ open, onClose, onSuccess }: HostAccessDialogP
               Accès organisateur
             </h2>
             <p className="text-sm text-slate-400">
-              Réservé à PhilDEV : la création de réunions et le rôle d’hôte exigent cette clé.
+              Identifiez-vous pour créer et organiser vos réunions.
             </p>
           </div>
 
@@ -157,7 +157,6 @@ export function HostAccessDialog({ open, onClose, onSuccess }: HostAccessDialogP
               setKey(event.target.value)
               if (error) setError(null)
             }}
-            hint="Le secret PHILDEV_HOST_KEY enregistré dans FreeBuff Sites. Il n’est jamais conservé dans le navigateur."
           />
 
           <Button type="submit" size="lg" disabled={busy} className="w-full">
@@ -173,7 +172,7 @@ export function HostAccessDialog({ open, onClose, onSuccess }: HostAccessDialogP
         <div className="flex flex-col gap-3 border-t border-ink-700 pt-4">
           <div className="flex items-center justify-between gap-3">
             <StatusPill tone="neutral" icon={<Stethoscope aria-hidden="true" className="size-3.5" />}>
-              Diagnostic RealtimeKit
+              Vérification de connexion
             </StatusPill>
             <Button variant="ghost" size="sm" disabled={diagnosticBusy} onClick={() => void runDiagnostic()}>
               {diagnosticBusy ? (
