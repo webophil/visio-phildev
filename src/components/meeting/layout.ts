@@ -82,7 +82,34 @@ export const WAITING_BANNER_CLASS =
 
 /** Vignette compacte (bande sous un partage d'écran). */
 export const COMPACT_TILE_CLASS =
-  'relative aspect-video w-40 shrink-0 overflow-hidden rounded-xl border border-ink-700 bg-ink-900'
+  'relative aspect-video w-32 shrink-0 overflow-hidden rounded-xl border border-ink-700 bg-ink-900 sm:w-40'
+
+/**
+ * Scène de présentation.
+ *
+ * Elle remplace entièrement la grille des caméras : le partage n'est plus une
+ * cellule dimensionnée pour plusieurs webcams. La scène est une colonne dont
+ * la surface d'image prend toute la hauteur restante.
+ */
+export const PRESENTATION_STAGE_CLASS =
+  'presentation-stage flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden bg-ink-950'
+
+/**
+ * Surface du partage d'écran.
+ *
+ * `size-full` + `min-h-0` : elle occupe réellement toute la place laissée par
+ * la barre de présentation et les vignettes. En plein écran natif, le
+ * navigateur l'affiche seule ; en repli CSS, `fixed inset-0` la porte au
+ * viewport sans modifier la mise en page des autres participants.
+ */
+export function presentationSurfaceClass(fallback: boolean): string {
+  return [
+    'presentation-surface flex size-full min-h-0 min-w-0 items-center justify-center overflow-hidden bg-black',
+    // Une seule position à la fois : `relative` et `fixed` se neutralisent
+    // selon l'ordre des classes générées par Tailwind.
+    fallback ? 'fixed inset-0 z-50' : 'relative',
+  ].join(' ')
+}
 
 /**
  * Panneau latéral.

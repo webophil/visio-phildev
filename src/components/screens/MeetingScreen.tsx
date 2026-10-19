@@ -11,6 +11,7 @@ import { RemoteAudioSinks } from '../meeting/RemoteAudio'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { StatusPill } from '../ui/StatusPill'
+import { cn } from '../../lib/cn'
 import { formatDuration, pluralize } from '../../lib/format'
 import { useMeeting } from '../../state/meetingContext'
 
@@ -37,6 +38,7 @@ function MeetingLayout() {
     useMeeting()
 
   const participantCount = session.participants.length
+  const presenting = Boolean(session.screenShare)
   const connectionLabel =
     transport.connection === 'connected'
       ? 'Connecté'
@@ -53,7 +55,12 @@ function MeetingLayout() {
      * un long message de chat allongeait la page et agrandissait les vignettes.
      */
     <div className="flex h-dvh flex-col overflow-hidden bg-ink-950">
-      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-ink-800 bg-ink-900/80 px-4 py-3 backdrop-blur-sm sm:px-6">
+      <header
+        className={cn(
+          'flex shrink-0 flex-wrap items-center justify-between border-b border-ink-800 bg-ink-900/80 backdrop-blur-sm',
+          presenting ? 'gap-2 px-3 py-1.5' : 'gap-3 px-4 py-3 sm:px-6',
+        )}
+      >
         <div className="flex min-w-0 items-center gap-3.5">
           <PhilDevLogo size="sm" />
           <span aria-hidden="true" className="hidden h-6 w-px bg-ink-700 sm:block" />
@@ -62,12 +69,20 @@ function MeetingLayout() {
 
         <div className="flex flex-wrap items-center gap-2">
           {isHost ? (
-            <StatusPill tone="neutral" icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}>
+            <StatusPill
+              tone="neutral"
+              className={presenting ? 'hidden sm:inline-flex' : undefined}
+              icon={<Crown aria-hidden="true" className="size-3.5 text-amber-300" />}
+            >
               Organisateur
             </StatusPill>
           ) : null}
 
-          <StatusPill tone="neutral" icon={<Clock aria-hidden="true" className="size-3.5" />}>
+          <StatusPill
+            tone="neutral"
+            className={presenting ? 'hidden lg:inline-flex' : undefined}
+            icon={<Clock aria-hidden="true" className="size-3.5" />}
+          >
             <span className="tabular-nums" aria-label="Durée de la réunion">
               {formatDuration(durationMs)}
             </span>
@@ -92,7 +107,7 @@ function MeetingLayout() {
             {connectionLabel}
           </StatusPill>
 
-          <InviteLinkButton />
+          {presenting ? null : <InviteLinkButton />}
         </div>
       </header>
 
@@ -112,8 +127,18 @@ function MeetingLayout() {
         </div>
       ) : null}
 
-      <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4 lg:flex-row">
-        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
+      <main
+        className={cn(
+          'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden lg:flex-row',
+          presenting ? 'gap-2 p-1.5 sm:p-2' : 'gap-3 p-3 sm:p-4',
+        )}
+      >
+        <div
+          className={cn(
+            'flex min-h-0 min-w-0 flex-1 flex-col overflow-hidden',
+            presenting ? 'gap-1.5' : 'gap-3',
+          )}
+        >
           {/* Sortie audio des voix distantes : montée ici, donc indépendante de
               la disposition affichée par la scène. */}
           <RemoteAudioSinks />

@@ -16,8 +16,10 @@ import {
 import { RemoteAudioSinks } from '../src/components/meeting/RemoteAudio'
 import {
   COMPACT_TILE_CLASS,
+  PRESENTATION_STAGE_CLASS,
   SIDE_PANEL_CLASS,
   WAITING_BANNER_CLASS,
+  presentationSurfaceClass,
   stageColumns,
   stageGridClass,
   stageTileClass,
@@ -412,6 +414,24 @@ checks.push({
     expect(!gridTile.includes('min-h-40'), 'plus de hauteur minimale sur la vignette')
     expect(COMPACT_TILE_CLASS.includes('aspect-video'), 'vignette compacte en 16:9')
 
+    // Mode présentation : surface dédiée, jamais une cellule de grille.
+    expect(
+      PRESENTATION_STAGE_CLASS.includes('flex-1') &&
+        PRESENTATION_STAGE_CLASS.includes('min-h-0') &&
+        PRESENTATION_STAGE_CLASS.includes('overflow-hidden'),
+      'scène de présentation bornée par l’espace disponible',
+    )
+    expect(
+      presentationSurfaceClass(false).includes('size-full') &&
+        presentationSurfaceClass(false).includes('min-h-0'),
+      'surface de partage plein cadre',
+    )
+    expect(
+      presentationSurfaceClass(true).includes('fixed inset-0') &&
+        presentationSurfaceClass(true).includes('z-50'),
+      'repli plein écran sans API Fullscreen',
+    )
+
     // Panneau : largeur fixe, non compressible et non extensible.
     expect(SIDE_PANEL_CLASS.includes('lg:w-[22rem]'), 'largeur fixe sur ordinateur')
     expect(
@@ -541,6 +561,53 @@ checks.push({
       'seul → exactement une vignette, celle du participant local',
     )
 
+    // --- Partage : scène de présentation automatique -----------------------
+    const sharingParticipant = {
+      id: 'share-1',
+      name: 'Aurore',
+      videoEnabled: true,
+      audioEnabled: true,
+      isHost: false,
+      screenShareEnabled: true,
+      screenShareTracks: null,
+      audioTrack: null,
+      registerVideoElement: () => {},
+      deregisterVideoElement: () => {},
+      on: () => {},
+      removeListener: () => {},
+    } as unknown as RTKParticipant
+
+    const sharingClient = {
+      self: {
+        ...stageClient.self,
+        screenShareTracks: null,
+        on: () => {},
+        removeListener: () => {},
+      },
+      participants: { joined: { toArray: () => [sharingParticipant] } },
+    }
+
+    const sharingHtml = renderToStaticMarkup(
+      <RealtimeKitContext.Provider
+        value={{ meeting: sharingClient, updates: undefined } as unknown as React.ContextType<
+          typeof RealtimeKitContext
+        >}
+      >
+        <MeetingContext.Provider value={stageContext}>
+          <MeetingStage />
+        </MeetingContext.Provider>
+      </RealtimeKitContext.Provider>,
+    )
+
+    expect(sharingHtml.includes('Mode présentation'), 'le partage ouvre la présentation automatique')
+    expect(sharingHtml.includes('Écran partagé par Aurore'), 'le partageur est identifié')
+    expect(sharingHtml.includes('Masquer les caméras'), 'les caméras peuvent être masquées')
+    expect(sharingHtml.includes('Agrandir le partage'), 'commande de plein écran présente')
+    expect(sharingHtml.includes('presentation-surface'), 'surface de partage dédiée')
+    expect(!sharingHtml.includes('stage-area'), 'le partage ne passe pas par la grille des caméras')
+    expect(sharingHtml.includes('object-contain'), 'le partage conserve son ratio sans recadrage')
+    expect(sharingHtml.includes('aspect-video'), 'les caméras passent en vignettes compactes')
+
     // Les utilitaires CSS qui portent le cadre et la mesure de la scène.
     const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
     expect(/@utility stage-area \{[^}]*container-type: size/.test(css), 'scène mesurable (container-type)')
@@ -603,6 +670,7 @@ checks.push({
     )
     expect(shareHtml.includes('object-contain'), 'partage d’écran sans recadrage')
     expect(shareHtml.includes('absolute inset-0'), 'partage d’écran hors du flux')
+    expect(/<video[^>]*muted/.test(shareHtml), 'partage visuel non bloqué par la lecture automatique')
   },
 })
 
