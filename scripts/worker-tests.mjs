@@ -232,6 +232,51 @@ await testAsync('une route inconnue hors navigation reste 404', async () => {
   assert.equal(response.status, 404)
 })
 
+group('En-têtes HTTP de sécurité')
+
+await testAsync('le document et les assets reçoivent les en-têtes de sécurité', async () => {
+  for (const path of ['/', '/assets/app.js']) {
+    const response = await appRequest(path, {
+      headers: { 'Sec-Fetch-Mode': path === '/' ? 'navigate' : 'script', Accept: path === '/' ? 'text/html' : '*/*' },
+    })
+    assert.equal(response.status, 200)
+    assert.equal(response.headers.get('X-Content-Type-Options'), 'nosniff')
+    assert.equal(response.headers.get('Referrer-Policy'), 'no-referrer')
+    assert.equal(response.headers.get('X-Frame-Options'), 'DENY')
+    assert.match(response.headers.get('Content-Security-Policy') ?? '', /frame-ancestors 'none'/)
+
+    const reportOnly = response.headers.get('Content-Security-Policy-Report-Only') ?? ''
+    assert.match(reportOnly, /default-src 'self'/, 'CSP report-only absente')
+    assert.match(reportOnly, /script-src 'self' 'wasm-unsafe-eval'/, 'MediaPipe doit rester autorisé')
+    assert.match(reportOnly, /https:\/\/api\.realtime\.cloudflare\.com/, 'API RealtimeKit absente')
+    assert.match(reportOnly, /wss:\/\/\*\.realtime\.cloudflare\.com/, 'signaling RealtimeKit absent')
+  }
+})
+
+await testAsync('la CSP complète reste en Report-Only et HSTS reste absent', async () => {
+  const response = await appRequest('/', { headers: { 'Sec-Fetch-Mode': 'navigate', Accept: 'text/html' } })
+  assert.equal(
+    response.headers.get('Content-Security-Policy'),
+    "frame-ancestors 'none'",
+    'la CSP complète ne doit pas encore bloquer les ressources',
+  )
+  assert.ok(response.headers.get('Content-Security-Policy-Report-Only'))
+  assert.equal(response.headers.get('Strict-Transport-Security'), null, 'HSTS ne doit pas être activé')
+})
+
+await testAsync('les réponses 404 et API conservent leurs en-têtes et reçoivent les nouveaux', async () => {
+  const missing = await appRequest('/assets/absent-xyz.js', { headers: { 'Sec-Fetch-Mode': 'script' } })
+  assert.equal(missing.status, 404)
+  assert.equal(missing.headers.get('X-Content-Type-Options'), 'nosniff')
+  assert.ok(missing.headers.get('Content-Security-Policy-Report-Only'))
+
+  const health = await appRequest('/api/health', { headers: { 'CF-Connecting-IP': '10.0.0.99' } })
+  assert.equal(health.status, 200)
+  assert.equal(health.headers.get('Cache-Control'), 'no-store')
+  assert.equal(health.headers.get('X-Content-Type-Options'), 'nosniff')
+  assert.ok(health.headers.get('Content-Security-Policy-Report-Only'))
+})
+
 group('API : état et sécurité')
 
 await testAsync('GET /api/health répond sans secret', async () => {

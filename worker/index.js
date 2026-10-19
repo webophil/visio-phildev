@@ -32,6 +32,7 @@
 
 import { HOST_SESSION_TTL_MS, createHostSession, hasHostSecret, verifyHostKey, verifyHostSession } from './hostAuth.js'
 import { clientKey, createRateLimiter } from './rateLimit.js'
+import { applySecurityHeaders } from './securityHeaders.js'
 import {
   HOST_CUSTOM_ID,
   RealtimeKitError,
@@ -462,20 +463,20 @@ export default {
     const url = new URL(request.url)
 
     if (url.pathname === '/api' || url.pathname.startsWith('/api/')) {
-      return routeApi(request, url, env)
+      return applySecurityHeaders(await routeApi(request, url, env))
     }
 
     const response = await env.ASSETS.fetch(request)
 
     // Ressource servie, redirection, erreur autre que « introuvable » :
     // la réponse de la couche assets fait foi.
-    if (response.status !== 404) return response
+    if (response.status !== 404) return applySecurityHeaders(response)
 
     // Ressource absente : le 404 est conservé tel quel.
-    if (!isAppNavigation(request)) return response
+    if (!isAppNavigation(request)) return applySecurityHeaders(response)
 
     // Route de l'application absente du disque : c'est l'entrée de l'interface.
     const indexUrl = new URL('/', request.url)
-    return env.ASSETS.fetch(new Request(indexUrl, request))
+    return applySecurityHeaders(await env.ASSETS.fetch(new Request(indexUrl, request)))
   },
 }
