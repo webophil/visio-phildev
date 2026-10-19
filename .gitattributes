@@ -1,0 +1,7 @@
+# Fins de ligne normalisées.
+#
+# Le dépôt stocke et le worktree travaille en LF, quel que soit l'OS. Sans cette
+# règle, un aller-retour par un poste Windows réécrit tout l'arbre en CRLF et
+# `git status` annonce chaque fichier comme modifié, ce qui masque les vraies
+# modifications.
+* text=auto eol=lf
