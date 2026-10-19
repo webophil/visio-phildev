@@ -268,6 +268,7 @@ function ScreenShareBox({ videoRef, label, className, placeholder }: ScreenShare
         ref={videoRef}
         autoPlay
         playsInline
+        muted
         aria-label={label}
         /* Hors flux : le partage d'écran ne doit pas non plus dicter la mise en page. */
         className={cn('absolute inset-0 size-full object-contain', hasImage ? '' : 'invisible')}
