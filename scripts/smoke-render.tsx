@@ -28,6 +28,7 @@ import { MeetingScreen } from '../src/components/screens/MeetingScreen'
 import { UnknownRouteScreen } from '../src/components/screens/UnknownRouteScreen'
 import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
 import { remoteAudioTracks } from '../src/media/remoteAudio'
+import { CHAT_BOTTOM_THRESHOLD, isScrolledToBottom } from '../src/lib/chatScroll'
 import { createMeetingId, generateUuid, isRealtimeKitId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
 import { mediaFailure } from '../src/lib/mediaErrors'
 import { readFileSync } from 'node:fs'
@@ -918,7 +919,10 @@ checks.push({
 checks.push({
   name: 'panneau de chat',
   run: () => {
-    const renderChat = (available: boolean) => {
+    const renderChat = (
+      available: boolean,
+      messages: { id: string; text: string; authorName: string; isLocal: boolean; sentAt: number }[] = [],
+    ) => {
       const context = {
         closePanel: () => {},
         chat: {
@@ -930,7 +934,7 @@ checks.push({
             ? null
             : 'Les messages écrits ne sont pas activés pour cette réunion. L’organisateur peut les autoriser.',
           maxTextLength: 500,
-          messages: [],
+          messages,
         },
         sendChatMessage: async () => true,
       } as unknown as MeetingContextValue
@@ -966,6 +970,40 @@ checks.push({
     expect(!visible.includes('RealtimeKit'), 'aucune mention de RealtimeKit')
     expect(!visible.includes('SDK'), 'aucune mention du SDK')
     expect(!visible.includes('profil de participant'), 'aucun jargon de profil de participant')
+
+    // Ancrage en bas et ordre chronologique du fil.
+    const thread = renderChat(true, [
+      { id: 'm1', text: 'Premier message', authorName: 'Aurore', isLocal: false, sentAt: 1 },
+      { id: 'm2', text: 'Second message', authorName: 'Aurore', isLocal: false, sentAt: 2 },
+    ])
+    expect(thread.includes('mt-auto'), 'le fil est ancré au bas de la zone')
+    expect(
+      thread.indexOf('Premier message') < thread.indexOf('Second message'),
+      'ordre chronologique conservé dans le DOM',
+    )
+    expect(thread.includes('aria-live="polite"'), 'annonces accessibles conservées')
+
+    // Décision de suivi : en bas (tolérance incluse) vs remontée volontaire.
+    expect(
+      isScrolledToBottom({ scrollTop: 500, scrollHeight: 1000, clientHeight: 500 }),
+      'liste en bas → suivi du dernier message',
+    )
+    expect(
+      isScrolledToBottom({ scrollTop: 480, scrollHeight: 1000, clientHeight: 500 }),
+      'proximité immédiate du bas → suivi conservé',
+    )
+    expect(
+      !isScrolledToBottom({ scrollTop: 300, scrollHeight: 1000, clientHeight: 500 }),
+      'remontée volontaire → aucun retour forcé en bas',
+    )
+    expect(
+      !isScrolledToBottom({
+        scrollTop: 1000 - 500 - CHAT_BOTTOM_THRESHOLD - 1,
+        scrollHeight: 1000,
+        clientHeight: 500,
+      }),
+      'juste au-delà de la tolérance → pas de suivi',
+    )
   },
 })
 
