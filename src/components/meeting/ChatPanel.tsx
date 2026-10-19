@@ -5,6 +5,7 @@ import { MessageSquare, Send } from 'lucide-react'
 import { Button } from '../ui/Button'
 import { Notice } from '../ui/Notice'
 import { SidePanel } from '../ui/SidePanel'
+import { isScrolledToBottom } from '../../lib/chatScroll'
 import { formatClockTime } from '../../lib/format'
 import { NOTICES } from '../../lib/notices'
 import { useMeeting } from '../../state/meetingContext'
@@ -22,12 +23,22 @@ export function ChatPanel() {
   const { closePanel, chat, sendChatMessage } = useMeeting()
   const [draft, setDraft] = useState('')
   const listRef = useRef<HTMLDivElement | null>(null)
+  // Vrai tant que l'utilisateur n'a pas remonté le fil volontairement.
+  const stickToBottom = useRef(true)
 
-  // Défilement automatique vers le dernier message reçu ou envoyé.
+  // Suit le dernier message uniquement si la liste était déjà en bas : remonter
+  // pour relire d'anciens messages ne provoque aucun saut à la réception.
   useEffect(() => {
     const node = listRef.current
-    if (node) node.scrollTop = node.scrollHeight
+    if (!node || !stickToBottom.current) return
+    node.scrollTop = node.scrollHeight
   }, [chat.messages.length])
+
+  const handleScroll = () => {
+    const node = listRef.current
+    if (!node) return
+    stickToBottom.current = isScrolledToBottom(node)
+  }
 
   const canWrite = chat.available && chat.canSend
   const busy = chat.sending
@@ -40,7 +51,16 @@ export function ChatPanel() {
     // Le brouillon n'est effacé qu'une fois le message accepté par le SDK :
     // un échec laisse la saisie intacte pour réessayer.
     const sent = await sendChatMessage(text)
-    if (sent) setDraft((current) => (current.trim() === text ? '' : current))
+    if (sent) {
+      // Envoyer est un geste explicite : on revient au dernier message, même si
+      // l'utilisateur lisait plus haut.
+      stickToBottom.current = true
+      requestAnimationFrame(() => {
+        const node = listRef.current
+        if (node) node.scrollTop = node.scrollHeight
+      })
+      setDraft((current) => (current.trim() === text ? '' : current))
+    }
   }
 
   return (
@@ -109,11 +129,17 @@ export function ChatPanel() {
             role="log"
             aria-live="polite"
             aria-label="Messages de la réunion"
-            className="flex min-h-0 flex-1 flex-col gap-2.5 overflow-y-auto pr-0.5"
+            onScroll={handleScroll}
+            className="flex min-h-0 flex-1 flex-col overflow-y-auto pr-0.5"
           >
-            {chat.messages.map((message) => (
-              <ChatBubble key={message.id} message={message} />
-            ))}
+            {/* `mt-auto` : avec peu de messages, le fil se pose au bas de la
+                zone ; dès qu'il dépasse, l'ordre chronologique reprend et le
+                défilement reste interne. */}
+            <div className="mt-auto flex flex-col gap-2.5">
+              {chat.messages.map((message) => (
+                <ChatBubble key={message.id} message={message} />
+              ))}
+            </div>
           </div>
         )}
 
