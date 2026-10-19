@@ -4,6 +4,9 @@
   "version": "0.0.0",
   "type": "module",
   "scripts": {
+    "vendor:mediapipe": "node scripts/vendor-mediapipe.mjs",
+    "predev": "npm run vendor:mediapipe",
+    "prebuild": "npm run vendor:mediapipe",
     "dev": "vite",
     "build": "tsc -b && vite build",
     "typecheck": "tsc -b",
@@ -15,6 +18,7 @@
   "dependencies": {
     "@cloudflare/realtimekit": "^2.0.3",
     "@cloudflare/realtimekit-react": "^2.0.3",
+    "@mediapipe/selfie_segmentation": "^0.1.1675465747",
     "@tailwindcss/vite": "^4.3.3",
     "lucide-react": "^1.56.0",
     "react": "^19.2.8",

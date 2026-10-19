@@ -2,7 +2,15 @@ import type RTKClient from '@cloudflare/realtimekit'
 import { createContext, useContext } from 'react'
 
 import type { RtkMediaController } from '../media/useRtkMedia'
-import type { MeetingSessionState, SessionError, SessionPhase, SidePanelId, TransportState } from '../types/meeting'
+import type {
+  ChatState,
+  MeetingSessionState,
+  SessionError,
+  SessionPhase,
+  SidePanelId,
+  TransportState,
+  VideoEffectId,
+} from '../types/meeting'
 
 export interface MeetingContextValue {
   /** Identifiant lisible de la réunion (route `/rdv-…`). */
@@ -39,6 +47,18 @@ export interface MeetingContextValue {
   transport: TransportState
   /** Instantané de la session temps réel : participants, médias, erreurs. */
   session: MeetingSessionState
+
+  /** Chat de la réunion (messagerie native RealtimeKit, sans stockage). */
+  chat: ChatState
+  /** Envoie un message aux participants connectés (`true` si accepté). */
+  sendChatMessage: (text: string) => Promise<boolean>
+
+  /** Effet vidéo local actif (aucun effet par défaut). */
+  videoEffect: VideoEffectId
+  /** Active ou retire un effet vidéo ; l'échec est exposé par `videoEffectError`. */
+  setVideoEffect: (effect: VideoEffectId) => Promise<void>
+  videoEffectBusy: boolean
+  videoEffectError: string | null
 
   /** Vrai si la session locale est bien celle de l'organisateur. */
   isHost: boolean

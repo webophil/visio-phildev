@@ -23,10 +23,16 @@ export const NOTICES = {
   screenShareNote:
     "Votre écran est transmis à tous les participants. Votre caméra reste visible en vignette pendant le partage.",
 
-  /** Hors périmètre */
-  chat: "Le chat écrit n'est pas disponible dans cette version : la réunion se limite à l'audio, la vidéo et le partage d'écran.",
+  /** Chat */
+  chat: "Les messages passent par la messagerie de la réunion Cloudflare RealtimeKit. Ils ne sont ni enregistrés ni relus après la réunion : aucun historique n'est conservé par l'application.",
+  chatUnavailable:
+    "Le profil de participant de cette réunion n'autorise pas les messages écrits. L'organisateur peut l'activer dans le tableau de bord Cloudflare RealtimeKit.",
+
+  /** Effets de fond */
   backgroundEffects:
-    "Le flou et les fonds virtuels exigent une segmentation vidéo image par image. Ces réglages restent désactivés plutôt que présentés comme actifs.",
+    "Le flou s'applique à votre flux vidéo avant sa diffusion : seuls les participants voient le résultat, votre caméra locale n'est pas modifiée.",
+  backgroundBlurUnsupported:
+    "Si votre navigateur ne prend pas en charge ce traitement, le flou n'est pas activé : votre caméra reste diffusée normalement, sans effet et sans message d'erreur technique.",
 
   /** Matériel */
   deviceFallback:

@@ -49,8 +49,9 @@ export function VideoSurface({
         playsInline
         muted
         aria-label={label}
+        /* Hors flux : la taille des cadres ne dépend jamais du média. */
         className={cn(
-          'size-full',
+          'absolute inset-0 size-full',
           objectFit === 'cover' ? 'object-cover' : 'object-contain',
           mirrored ? '-scale-x-100' : '',
           active ? '' : 'invisible',

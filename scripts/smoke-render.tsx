@@ -3,18 +3,61 @@ import type { RTKParticipant } from '@cloudflare/realtimekit'
 import { RealtimeKitContext } from '@cloudflare/realtimekit-react'
 import { renderToStaticMarkup } from 'react-dom/server'
 
+import type { RTKSelf } from '@cloudflare/realtimekit'
+
+import { ChatPanel } from '../src/components/meeting/ChatPanel'
+import { MeetingStage } from '../src/components/meeting/MeetingStage'
+import {
+  RemoteScreenShare,
+  RtkParticipantVideo,
+  RtkSelfVideo,
+} from '../src/components/meeting/RtkVideoSurface'
 import { RemoteAudioSinks } from '../src/components/meeting/RemoteAudio'
+import {
+  COMPACT_TILE_CLASS,
+  SIDE_PANEL_CLASS,
+  WAITING_BANNER_CLASS,
+  stageColumns,
+  stageGridClass,
+  stageTileClass,
+} from '../src/components/meeting/layout'
+import { MeetingContext } from '../src/state/meetingContext'
+import type { MeetingContextValue } from '../src/state/meetingContext'
 import { UnknownRouteScreen } from '../src/components/screens/UnknownRouteScreen'
 import { WelcomeScreen } from '../src/components/screens/WelcomeScreen'
 import { remoteAudioTracks } from '../src/media/remoteAudio'
 import { createMeetingId, generateUuid, isRealtimeKitId, meetingDisplayName, parseMeetingInput } from '../src/lib/ids'
 import { mediaFailure } from '../src/lib/mediaErrors'
+import { readFileSync } from 'node:fs'
+import vm from 'node:vm'
+
+import {
+  BLUR_ENGINE_SCRIPT_URL,
+  VideoEffectError,
+  applyPersonMask,
+  applyVideoEffect,
+  applyVideoEffectWith,
+  maskOpacity,
+  maskSizeFor,
+  maskValueForPixel,
+  normalizedFrameSize,
+  normalizedWorkSize,
+  readVideoEffectStats,
+} from '../src/media/backgroundBlur'
+import { DEFAULT_MEETING_TITLE, MAX_MEETING_TITLE_LENGTH, normalizeMeetingTitle } from '../src/lib/meetingTitle'
 import { MeetingApiError } from '../src/meeting/rtkApi'
-import { describeSessionError } from '../src/meeting/rtkErrors'
-import { buildInvitationUrl, buildMeetingUrl, formatDuration, meetingPath, parseMeetingLink } from '../src/lib/format'
+import { describeChatError, describeSessionError } from '../src/meeting/rtkErrors'
+import {
+  buildInvitationUrl,
+  buildMeetingUrl,
+  formatClockTime,
+  formatDuration,
+  meetingPath,
+  parseMeetingLink,
+} from '../src/lib/format'
 import { parsePath, readRealtimeKitId } from '../src/lib/router'
 
-const checks: { name: string; run: () => void }[] = []
+const checks: { name: string; run: () => void | Promise<void> }[] = []
 
 function expect(condition: boolean, label: string) {
   if (!condition) throw new Error(`ÉCHEC : ${label}`)
@@ -115,6 +158,448 @@ checks.push({
         `https://visio.phildev.online/rdv-aurore?r=${UUID}`,
       'lien d’invitation complet',
     )
+
+    expect(formatClockTime(new Date(2026, 0, 5, 14, 7).getTime()) === '14:07', 'heure d’un message')
+    expect(formatClockTime(new Date(2026, 0, 5, 9, 3, 30).getTime()) === '09:03', 'heure à un chiffre complétée')
+    expect(formatClockTime(Number.NaN) === '--:--', 'horodatage invalide neutre')
+  },
+})
+
+// --- Nom de la réunion ---------------------------------------------------
+checks.push({
+  name: 'nom de réunion',
+  run: () => {
+    expect(normalizeMeetingTitle('') === DEFAULT_MEETING_TITLE, 'champ vide → nom par défaut')
+    expect(normalizeMeetingTitle('   ') === DEFAULT_MEETING_TITLE, 'espaces seuls → nom par défaut')
+    expect(normalizeMeetingTitle(undefined) === DEFAULT_MEETING_TITLE, 'absence → nom par défaut')
+    expect(
+      normalizeMeetingTitle('  Rendez-vous   Aurore Studer ') === 'Rendez-vous Aurore Studer',
+      'espaces réduits',
+    )
+    expect(
+      normalizeMeetingTitle('x'.repeat(200)).length === MAX_MEETING_TITLE_LENGTH,
+      'longueur bornée',
+    )
+    expect(DEFAULT_MEETING_TITLE === 'Réunion PhilDEV', 'nom par défaut attendu par l’interface')
+  },
+})
+
+// --- Flou d'arrière-plan -------------------------------------------------
+checks.push({
+  name: 'flou d’arrière-plan',
+  run: () => {
+    expect(
+      normalizedWorkSize(1280, 720).width === 480 && normalizedWorkSize(1280, 720).height === 270,
+      'plan de travail réduit à 480 px de large',
+    )
+    expect(
+      normalizedWorkSize(320, 240).width === 320 && normalizedWorkSize(320, 240).height === 240,
+      'petite image conservée telle quelle',
+    )
+    const odd = normalizedWorkSize(641, 361)
+    expect(odd.width % 2 === 0 && odd.height % 2 === 0, 'dimensions paires (pas de couture)')
+    expect(normalizedWorkSize(0, 0).width === 0, 'image absente → aucun traitement')
+
+    // Géométrie du flux publié : déduite de la piste, rapport d'image conservé.
+    const hd = normalizedFrameSize(1280, 720)
+    expect(hd.width === 1280 && hd.height === 720, '1280×720 conservé')
+    const uhd = normalizedFrameSize(2560, 1440)
+    expect(uhd.width === 1280 && uhd.height === 720, '1440p ramené à 1280×720')
+    const vga = normalizedFrameSize(640, 480)
+    expect(vga.width === 640 && vga.height === 480, '640×480 conservé')
+    expect(normalizedFrameSize(0, 0).width === 1280, 'taille inconnue → valeur sûre')
+
+    // Le masque suit le rapport d'image de la vidéo, jamais un 16:9 figé.
+    const wideMask = maskSizeFor(1280, 720)
+    expect(wideMask.width === 160 && wideMask.height === 90, 'masque 16:9 pour une vidéo 16:9')
+    const squareMask = maskSizeFor(1000, 1000)
+    expect(squareMask.width === 160 && squareMask.height === 160, 'masque carré pour une vidéo carrée')
+
+    // Le moteur doit être servi par l'application : jamais un CDN.
+    expect(
+      BLUR_ENGINE_SCRIPT_URL.startsWith('/vendor/mediapipe/selfie_segmentation/'),
+      'moteur servi depuis notre propre origine',
+    )
+    expect(
+      BLUR_ENGINE_SCRIPT_URL.endsWith('/selfie_segmentation.js'),
+      'script du moteur identifié',
+    )
+
+    // Régression réelle (Phase 2.1) : importé dans le bundle, ce paquet ne
+    // publie **aucun** export ES — `import { SelfieSegmentation }` valait
+    // `undefined`, le middleware levait et le SDK republiait la piste brute en
+    // répondant « succès ». Chargé comme un script classique, il publie bien
+    // son constructeur sur l'objet global.
+    const engineSource = readFileSync(
+      new URL(
+        '../node_modules/@mediapipe/selfie_segmentation/selfie_segmentation.js',
+        import.meta.url,
+      ),
+      'utf8',
+    )
+    const sandbox: Record<string, unknown> = { console }
+    vm.runInNewContext(engineSource, sandbox, { filename: 'selfie_segmentation.js' })
+    expect(
+      typeof sandbox.SelfieSegmentation === 'function',
+      'le script du moteur publie son constructeur global',
+    )
+  },
+})
+
+// --- Masque de segmentation ----------------------------------------------
+checks.push({
+  name: 'masque de segmentation',
+  run: () => {
+    // MediaPipe écrit `vec4(m, 0, 0, m)` : rouge et alpha portent la même valeur.
+    expect(maskValueForPixel(255, 255) === 255, 'personne lue à 255 (rouge = alpha)')
+    expect(maskValueForPixel(0, 0) === 0, 'fond lu à 0')
+    expect(maskValueForPixel(128, 128) === 128, 'contour progressif conservé')
+    expect(maskValueForPixel(200, 255) === 200, 'alpha aplati → rouge utilisé')
+
+    // La rampe rend le premier plan totalement net sans toucher au flou du fond.
+    expect(maskOpacity(0) === 0, 'fond → totalement transparent')
+    expect(maskOpacity(255) === 255, 'personne → totalement opaque')
+    expect(maskOpacity(26) === 0, 'bruit de fond éliminé')
+    expect(maskOpacity(153) === 255, 'silhouette franche rendue nette à 60 %')
+
+    // Masque synthétique 8×8 : silhouette 4×4 au centre, fond autour.
+    const size = 8
+    const mask = new Uint8ClampedArray(size * size * 4)
+    for (let y = 0; y < size; y += 1) {
+      for (let x = 0; x < size; x += 1) {
+        const index = (y * size + x) * 4
+        const inPerson = x >= 2 && x < 6 && y >= 2 && y < 6
+        // Encodage réel de MediaPipe : [m, 0, 0, m]
+        mask[index] = inPerson ? 255 : 0
+        mask[index + 3] = inPerson ? 255 : 0
+      }
+    }
+
+    const stats = applyPersonMask(mask)
+    expect(Math.abs(stats.coverage - 0.25) < 0.001, 'couverture = 25 % de l’image')
+    // Diagnostic de format : 25 % de pixels à 255 ⇒ moyenne brute de 64.
+    expect(stats.redMean === 64, 'moyenne du rouge exposée (64)')
+    expect(stats.alphaMean === 64, 'moyenne de l’alpha exposée (64)')
+
+    const alphaAt = (x: number, y: number) => mask[(y * size + x) * 4 + 3]
+    expect(alphaAt(4, 4) === 255, 'centre → premier plan opaque')
+    expect(alphaAt(0, 0) === 0, 'coin → arrière-plan')
+    expect(alphaAt(2, 2) === 255, 'bord de la silhouette conservé')
+
+    // Composition de référence : la personne nette recouvre le fond flou.
+    const sharp = 200
+    const blurred = 40
+    const compose = (alpha: number) => Math.round((sharp * alpha + blurred * (255 - alpha)) / 255)
+    expect(compose(alphaAt(4, 4)) === sharp, 'centre : image nette, pas le fond flou')
+    expect(compose(alphaAt(0, 0)) === blurred, 'coin : fond flou conservé')
+    expect(compose(alphaAt(7, 7)) === blurred, 'second coin : fond flou conservé')
+  },
+})
+
+// --- Application de l'effet vidéo ----------------------------------------
+checks.push({
+  name: 'application du flou',
+  run: async () => {
+    /** Faux support média : le SDK y répond « succès » quoi qu'il arrive. */
+    const createFakeMedia = (silentFallback: boolean) => {
+      const raw = { id: 'raw-track' } as unknown as MediaStreamTrack
+      const processed = { id: 'processed-track' } as unknown as MediaStreamTrack
+      let applied = false
+      let removals = 0
+      let ownsCanvas = false
+
+      return {
+        media: {
+          videoEnabled: true,
+          async setVideoMiddlewareGlobalConfig(config: { disablePerFrameCanvasRendering: boolean }) {
+            ownsCanvas = config.disablePerFrameCanvasRendering === true
+          },
+          get videoTrack() {
+            return applied && !silentFallback ? processed : raw
+          },
+          get rawVideoTrack() {
+            return raw
+          },
+          async addVideoMiddleware() {
+            applied = true
+            return { success: true, message: 'Successfully added the middleware.' }
+          },
+          async removeVideoMiddleware() {
+            applied = false
+            removals += 1
+            return { success: true, message: 'Successfully removed the middleware.' }
+          },
+        },
+        removals: () => removals,
+        ownsCanvas: () => ownsCanvas,
+      }
+    }
+
+    const createFakeRenderer = async () => ({
+      attach: async () => {},
+      detach: () => {},
+      stats: () => ({
+        imagesReceived: 3,
+        personCoverage: 0.4,
+        maskRedMean: 64,
+        maskAlphaMean: 64,
+        imagesBlurred: 3,
+        masks: 2,
+        imagesPerSecond: 20,
+        masksPerSecond: 14,
+        lastImageAgoMs: 50,
+        frameWidth: 1280,
+        frameHeight: 720,
+      }),
+      dispose: () => {},
+    })
+
+    // Cas réellement observé en Phase 2.1 : le SDK répond « succès », garde le
+    // middleware, mais republie la piste brute (sa fabrication a échoué en
+    // silence). L'interface affichait alors « Flou · Actif » sans effet.
+    const silent = createFakeMedia(true)
+    let rejection: unknown = null
+    try {
+      await applyVideoEffectWith(silent.media, 'blur', createFakeRenderer)
+    } catch (error) {
+      rejection = error
+    }
+
+    expect(rejection instanceof VideoEffectError, 'piste brute non substituée → échec explicite')
+    expect(
+      rejection instanceof Error && rejection.message.includes("n'a pas appliqué"),
+      'message explicite pour l’utilisateur',
+    )
+    expect(silent.removals() === 1, 'middleware retiré après échec')
+    expect(readVideoEffectStats() === null, 'aucun rendu fantôme conservé')
+
+    const working = createFakeMedia(false)
+    await applyVideoEffectWith(working.media, 'blur', createFakeRenderer)
+    expect(readVideoEffectStats()?.imagesBlurred === 3, 'compteurs de traitement exposés')
+    expect(
+      working.ownsCanvas(),
+      'le canvas est piloté par le traitement (géométrie de la piste)',
+    )
+    await applyVideoEffect(working.media, 'none')
+    expect(readVideoEffectStats() === null, '« Aucun effet » libère le traitement')
+    expect(working.removals() === 1, 'middleware retiré explicitement')
+  },
+})
+
+// --- Mise en page de la réunion ------------------------------------------
+checks.push({
+  name: 'mise en page',
+  run: () => {
+    expect(stageColumns(1) === 1, '1 vignette → 1 colonne')
+    expect(stageColumns(2) === 2 && stageColumns(4) === 2, '2 à 4 vignettes → 2 colonnes')
+    expect(stageColumns(5) === 3, '5 vignettes → 3 colonnes sur grand écran')
+
+    const grid = stageGridClass(4)
+    expect(grid.includes('auto-rows-fr'), 'lignes de hauteur égale')
+    expect(grid.includes('min-h-0') && grid.includes('min-w-0'), 'la scène ne dicte pas sa taille')
+    expect(grid.includes('overflow-hidden'), 'aucun débordement de la scène')
+    expect(!grid.includes('min-h-40'), 'aucune hauteur minimale fixe sur la scène')
+    expect(stageGridClass(5).includes('lg:grid-cols-3'), '5 participants → 3 colonnes')
+
+    // Vignettes en grille : dimensions issues de la grille uniquement.
+    const gridTile = stageTileClass(3)
+    expect(gridTile.includes('min-h-0'), 'vignette sans hauteur imposée')
+    expect(gridTile.includes('min-w-0'), 'vignette sans largeur imposée')
+    expect(gridTile.includes('h-full') && gridTile.includes('w-full'), 'la vignette remplit sa cellule')
+    expect(!gridTile.includes('min-h-40'), 'plus de hauteur minimale sur la vignette')
+    expect(COMPACT_TILE_CLASS.includes('aspect-video'), 'vignette compacte en 16:9')
+
+    // Panneau : largeur fixe, non compressible et non extensible.
+    expect(SIDE_PANEL_CLASS.includes('lg:w-[22rem]'), 'largeur fixe sur ordinateur')
+    expect(
+      SIDE_PANEL_CLASS.includes('lg:min-w-[22rem]') && SIDE_PANEL_CLASS.includes('lg:max-w-[22rem]'),
+      'largeur non compressible par un message long',
+    )
+    expect(SIDE_PANEL_CLASS.includes('min-w-0'), 'le contenu ne peut pas élargir le panneau')
+    expect(SIDE_PANEL_CLASS.includes('overflow-hidden'), 'panneau borné, défilement interne')
+
+    // Rendu réel du panneau de chat avec un message d'un seul « mot » très long.
+    const longWord = 'x'.repeat(600)
+    const context = {
+      closePanel: () => {},
+      chat: {
+        available: true,
+        canSend: true,
+        sending: false,
+        error: null,
+        unavailableReason: null,
+        maxTextLength: 1000,
+        messages: [
+          {
+            id: 'm1',
+            text: longWord,
+            authorName: 'Aurore',
+            isLocal: false,
+            sentAt: Date.now(),
+          },
+        ],
+      },
+      sendChatMessage: async () => true,
+    } as unknown as MeetingContextValue
+
+    const html = renderToStaticMarkup(
+      <MeetingContext.Provider value={context}>
+        <ChatPanel />
+      </MeetingContext.Provider>,
+    )
+
+    expect(html.includes('lg:w-[22rem]'), 'panneau rendu à largeur fixe')
+    expect(html.includes('overflow-wrap:anywhere'), 'mot très long renvoyé à la ligne')
+    expect(html.includes('break-words'), 'césure autorisée dans les bulles')
+    expect(html.includes('min-w-0'), 'bulles et en-têtes compressibles')
+    expect(
+      /aria-label="Messages de la réunion"[^>]*overflow-y-auto/.test(html),
+      'la liste des messages défile dans le panneau',
+    )
+    expect(html.includes(longWord), 'message long rendu intégralement')
+
+    // --- Disposition de la scène ------------------------------------------
+    // Seul : une seule vignette, centrée, dans un cadre 16:9 borné.
+    const one = stageGridClass(1)
+    expect(one.includes('grid-cols-1'), 'seul → une seule colonne')
+    expect(one.includes('place-items-center'), 'seul → vignette centrée')
+    expect(one.includes('h-full'), 'scène de hauteur explicite (1 participant)')
+    expect(!one.includes('auto-rows-fr'), 'seul → aucune répartition en plusieurs lignes')
+
+    const oneTile = stageTileClass(1)
+    expect(oneTile.includes('stage-frame'), 'seul → cadre 16:9 dimensionné par la scène')
+    expect(!oneTile.includes('h-full'), 'seul → la vignette ne s’étire pas sur toute la hauteur')
+    expect(!oneTile.includes('col-span') && !oneTile.includes('row-span'), 'seul → aucune cellule réservée')
+
+    // À deux : deux colonnes dès que la largeur le permet.
+    const two = stageGridClass(2)
+    expect(two.includes('h-full'), 'scène de hauteur explicite (2 participants)')
+    expect(two.includes('sm:grid-cols-2'), '2 participants → côte à côte sur écran large')
+    expect(two.includes('auto-rows-fr'), '2 participants → une seule ligne, hauteur répartie')
+
+    const twoTile = stageTileClass(2)
+    expect(twoTile.includes('h-full') && twoTile.includes('w-full'), '2 participants → chaque vignette occupe sa colonne')
+    expect(!twoTile.includes('aspect-video'), '2 participants → pas de cadre 16:9 forcé qui rétrécit l’image')
+    expect(!twoTile.includes('object-cover'), '2 participants → aucun recadrage imposé par le cadre')
+
+    // Trois à cinq : grille équilibrée et responsive.
+    expect(stageGridClass(3).includes('sm:grid-cols-2'), '3 participants → 2 colonnes')
+    expect(stageGridClass(5).includes('lg:grid-cols-3'), '5 participants → 3 colonnes')
+    expect(stageTileClass(4).includes('h-full'), 'grille → la vignette remplit la hauteur de sa cellule')
+
+    // L'emplacement vide est un bandeau, jamais une cellule de grille.
+    expect(WAITING_BANNER_CLASS.includes('shrink-0'), 'bandeau d’attente compact')
+    expect(
+      !WAITING_BANNER_CLASS.includes('col-span') &&
+        !WAITING_BANNER_CLASS.includes('row-span') &&
+        !WAITING_BANNER_CLASS.includes('grid'),
+      'l’attente ne réserve aucune cellule de la scène',
+    )
+
+    // --- La scène réelle : une seule vignette, aucune cellule réservée ------
+    const stageClient = {
+      self: {
+        videoEnabled: true,
+        audioEnabled: true,
+        screenShareEnabled: false,
+        registerVideoElement: () => {},
+        deregisterVideoElement: () => {},
+      },
+      participants: { joined: { toArray: () => [] } },
+    }
+
+    const stageContext = {
+      participantName: 'Aurore',
+      setScreenShareEnabled: async () => {},
+    } as unknown as MeetingContextValue
+
+    const stageHtml = renderToStaticMarkup(
+      <RealtimeKitContext.Provider
+        value={{ meeting: stageClient, updates: undefined } as unknown as React.ContextType<
+          typeof RealtimeKitContext
+        >}
+      >
+        <MeetingContext.Provider value={stageContext}>
+          <MeetingStage />
+        </MeetingContext.Provider>
+      </RealtimeKitContext.Provider>,
+    )
+
+    const gridIndex = stageHtml.indexOf('stage-area')
+    const bannerIndex = stageHtml.indexOf('Personne n’a encore rejoint')
+    expect(gridIndex > 0, 'scène rendue avec son cadre mesuré')
+    expect(bannerIndex > 0 && bannerIndex < gridIndex, 'l’attente est rendue hors de la grille')
+    expect(
+      !stageHtml.slice(gridIndex).includes('border-dashed'),
+      'aucune cellule d’attente dans la grille',
+    )
+    expect(
+      stageHtml.split('Votre flux vidéo').length - 1 === 1,
+      'seul → exactement une vignette, celle du participant local',
+    )
+
+    // Les utilitaires CSS qui portent le cadre et la mesure de la scène.
+    const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
+    expect(/@utility stage-area \{[^}]*container-type: size/.test(css), 'scène mesurable (container-type)')
+    expect(
+      /@utility stage-frame \{[^}]*aspect-ratio: 16 \/ 9/.test(css),
+      'cadre 16:9 défini en CSS',
+    )
+    expect(/@utility stage-frame \{[^}]*min\(100cqw, 177\.78cqh\)/.test(css), 'cadre borné par la scène')
+
+    // --- Les médias ne dictent jamais la taille des cadres -----------------
+    const selfStub = {
+      registerVideoElement: () => {},
+      deregisterVideoElement: () => {},
+    } as unknown as RTKSelf
+
+    const selfHtml = renderToStaticMarkup(
+      <RtkSelfVideo
+        self={selfStub}
+        enabled
+        label="Votre caméra"
+        className="size-full"
+        placeholder={<span>caméra coupée</span>}
+      />,
+    )
+    expect(selfHtml.includes('absolute inset-0'), 'aperçu local hors du flux')
+    expect(selfHtml.includes('object-contain'), 'aperçu local entier, sans recadrage')
+
+    const participantStub = {
+      id: 'p2',
+      name: 'Aurore',
+      videoEnabled: true,
+      audioEnabled: true,
+      isHost: false,
+      screenShareTracks: null,
+      registerVideoElement: () => {},
+      deregisterVideoElement: () => {},
+      on: () => {},
+      removeListener: () => {},
+    } as unknown as RTKParticipant
+
+    const remoteHtml = renderToStaticMarkup(
+      <RtkParticipantVideo
+        participant={participantStub}
+        enabled
+        label="Flux vidéo de Aurore"
+        className="size-full"
+        placeholder={<span>en attente</span>}
+      />,
+    )
+    expect(remoteHtml.includes('absolute inset-0'), 'vidéo distante hors du flux')
+    expect(remoteHtml.includes('object-contain'), 'vidéo distante entière, sans recadrage')
+
+    const shareHtml = renderToStaticMarkup(
+      <RemoteScreenShare
+        participant={participantStub}
+        label="Écran partagé"
+        className="min-h-0 flex-1"
+        placeholder={<span>écran</span>}
+      />,
+    )
+    expect(shareHtml.includes('object-contain'), 'partage d’écran sans recadrage')
+    expect(shareHtml.includes('absolute inset-0'), 'partage d’écran hors du flux')
   },
 })
 
@@ -194,6 +679,17 @@ checks.push({
       'API média absente : aucune relance proposée',
     )
     expect(mediaFailure('no-device').title.includes('Aucun périphérique'), 'matériel absent expliqué')
+
+    expect(
+      describeChatError({ code: '1101' }).includes('autorise pas'),
+      'chat refusé par le profil expliqué',
+    )
+    expect(describeChatError({ code: '0013' }).includes('Trop de messages'), 'limite de débit expliquée')
+    expect(
+      describeChatError({ code: '0012' }).includes('connexion'),
+      'coupure pendant l’envoi expliquée',
+    )
+    expect(describeChatError(undefined).includes('Réessayez'), 'échec inconnu : message actionnable')
   },
 })
 
@@ -306,6 +802,8 @@ checks.push({
     expect(html.includes('Rejoindre'), 'bouton rejoindre')
     expect(html.includes('Lien d’invitation'), 'champ de lien')
     expect(html.includes('Accès organisateur'), 'accès protégé de l’organisateur')
+    expect(html.includes('Nom de la réunion'), 'champ du nom de réunion')
+    expect(html.includes(DEFAULT_MEETING_TITLE), 'nom de réunion par défaut proposé')
     expect(html.includes('PhilDEV'), 'marque PhilDEV')
     expect(html.includes('Visio'), 'marque Visio')
     expect(html.includes('lang="fr"') === false, 'aucun attribut parasite')
@@ -326,7 +824,7 @@ let failures = 0
 for (const check of checks) {
   console.log(`\n▶ ${check.name}`)
   try {
-    check.run()
+    await check.run()
   } catch (error) {
     failures += 1
     console.error(`  ✗ ${(error as Error).message}`)

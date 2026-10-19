@@ -60,6 +60,8 @@ async function assetsFetch(request) {
 
 /** Réunion et participants simulés côté Cloudflare. */
 const rtkMeetings = new Map()
+/** Titre de réunion, tel que stocké par Cloudflare RealtimeKit. */
+const rtkTitles = new Map()
 const rtkCalls = []
 
 function seedMeeting() {
@@ -122,7 +124,21 @@ globalThis.fetch = async (input, init = {}) => {
 
   if (path.endsWith('/meetings') && method === 'POST') {
     const id = seedMeeting()
+    rtkTitles.set(id, body.title)
     return new Response(JSON.stringify({ success: true, data: { id, title: body.title } }), { status: 200 })
+  }
+
+  // Lecture d'une réunion : utilisée par `GET /api/meetings/:id`.
+  const meetingDetail = path.match(/\/realtime\/kit\/([^/]+)\/meetings\/([^/]+)$/)
+  if (meetingDetail && method === 'GET') {
+    const id = meetingDetail[2]
+    if (!rtkTitles.has(id)) {
+      return new Response(JSON.stringify({ success: false, errors: [{ code: 1001 }] }), { status: 404 })
+    }
+    return new Response(
+      JSON.stringify({ success: true, data: { id, title: rtkTitles.get(id) } }),
+      { status: 200 },
+    )
   }
 
   if (path.endsWith('/presets') && method === 'GET') {
@@ -299,11 +315,67 @@ await testAsync('avec session, la réunion est créée et l’emplacement hôte 
   const payload = await readJson(response, 'création de réunion')
   assert.ok(payload.meetingId, 'identifiant de réunion attendu')
   assert.equal(payload.maxParticipants, 5)
+  assert.equal(payload.title, 'Réunion Test', 'le nom saisi doit être celui de la réunion')
+  assert.equal(rtkTitles.get(payload.meetingId), 'Réunion Test')
 
   const participants = rtkMeetings.get(payload.meetingId)
   assert.equal(participants.length, 1)
   assert.equal(participants[0].preset_name, 'group_call_host', 'preset hôte attendu')
   assert.equal(participants[0].name, 'PhilDEV')
+})
+
+group('Nom de la réunion')
+
+await testAsync('un nom vide ou trop long est normalisé côté serveur', async () => {
+  const token = await login('10.0.5.1')
+  const create = (title) =>
+    appRequest('/api/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PhilDEV-Host': token, 'CF-Connecting-IP': '10.0.5.1' },
+      body: { title, displayName: 'PhilDEV' },
+    })
+
+  const blank = await (await create('   ')).json()
+  assert.equal(blank.title, 'Réunion PhilDEV', 'nom par défaut attendu')
+
+  const long = await (await create('x'.repeat(200))).json()
+  assert.equal(long.title.length, 80, 'nom borné à 80 caractères')
+})
+
+await testAsync('GET /api/meetings/:id expose le nom aux participants, sans secret', async () => {
+  const token = await login('10.0.5.2')
+  const created = await (
+    await appRequest('/api/meetings', {
+      method: 'POST',
+      headers: { 'Content-Type': 'application/json', 'X-PhilDEV-Host': token, 'CF-Connecting-IP': '10.0.5.2' },
+      body: { title: 'Rendez-vous Aurore Studer', displayName: 'PhilDEV' },
+    })
+  ).json()
+
+  // Lecture sans session : un invité doit pouvoir afficher le nom de la salle.
+  const response = await appRequest(`/api/meetings/${created.meetingId}`, {
+    headers: { 'CF-Connecting-IP': '10.0.5.3' },
+  })
+  assert.equal(response.status, 200)
+  assert.equal(response.headers.get('Cache-Control'), 'no-store')
+
+  const payload = await readJson(response, 'nom de réunion')
+  assert.deepEqual(Object.keys(payload).sort(), ['meetingId', 'title'])
+  assert.equal(payload.title, 'Rendez-vous Aurore Studer')
+})
+
+await testAsync('un identifiant invalide ou inconnu est refusé proprement', async () => {
+  const invalid = await appRequest('/api/meetings/pas-un-uuid', {
+    headers: { 'CF-Connecting-IP': '10.0.5.4' },
+  })
+  assert.equal(invalid.status, 400)
+  assert.equal((await invalid.json()).error, 'meeting-invalid')
+
+  const unknown = await appRequest(`/api/meetings/${crypto.randomUUID()}`, {
+    headers: { 'CF-Connecting-IP': '10.0.5.5' },
+  })
+  assert.equal(unknown.status, 404)
+  assert.equal((await readJson(unknown, 'réunion inconnue')).error, 'meeting-not-found')
 })
 
 group('Jetons de participation')

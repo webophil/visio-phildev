@@ -2,6 +2,7 @@ import { X } from 'lucide-react'
 import type { LucideIcon } from 'lucide-react'
 import type { ReactNode } from 'react'
 
+import { SIDE_PANEL_CLASS } from '../meeting/layout'
 import { cn } from '../../lib/cn'
 
 export interface SidePanelProps {
@@ -17,19 +18,17 @@ export interface SidePanelProps {
  * Panneau latéral de la salle de réunion (participants, chat, effets).
  * Sur ordinateur il complète la scène ; sur mobile il s'affiche en feuille
  * inférieure, sans masquer la barre de contrôle.
+ *
+ * Largeur fixe sur ordinateur et hauteur bornée par la colonne : le contenu
+ * défile **dans** le panneau, il ne peut ni l'élargir ni agrandir la scène.
  */
 export function SidePanel({ title, icon: Icon, onClose, children, footer, className }: SidePanelProps) {
   return (
     <aside
       aria-label={title}
-      className={cn(
-        'flex flex-col overflow-hidden border-ink-700 bg-ink-900',
-        'fixed inset-x-0 bottom-0 z-30 max-h-[72dvh] rounded-t-2xl border-t',
-        'lg:static lg:z-auto lg:max-h-none lg:w-[22rem] lg:shrink-0 lg:rounded-2xl lg:border',
-        className,
-      )}
+      className={cn(SIDE_PANEL_CLASS, className)}
     >
-      <header className="flex items-center justify-between gap-3 border-b border-ink-700 px-4 py-3">
+      <header className="flex shrink-0 items-center justify-between gap-3 border-b border-ink-700 px-4 py-3">
         <h2 className="flex items-center gap-2 text-sm font-semibold text-white">
           <Icon aria-hidden="true" className="size-4 text-accent-300" />
           {title}
@@ -44,9 +43,13 @@ export function SidePanel({ title, icon: Icon, onClose, children, footer, classN
         </button>
       </header>
 
-      <div className="flex-1 overflow-y-auto px-4 py-3.5">{children}</div>
+      <div className="min-h-0 flex-1 overflow-x-hidden overflow-y-auto overscroll-contain px-4 py-3.5">
+        {children}
+      </div>
 
-      {footer ? <div className="border-t border-ink-700 px-4 py-3">{footer}</div> : null}
+      {footer ? (
+        <div className="shrink-0 border-t border-ink-700 px-4 py-3">{footer}</div>
+      ) : null}
     </aside>
   )
 }

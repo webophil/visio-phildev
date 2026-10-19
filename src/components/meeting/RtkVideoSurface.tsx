@@ -134,8 +134,19 @@ function VideoShell({
         playsInline
         muted
         aria-label={label}
+        /*
+         * `absolute inset-0` : la vidéo est **hors du flux**. Un `<video>` est
+         * un élément remplacé : même en `height: 100%`, sa taille intrinsèque
+         * peut dicter la hauteur des conteneurs quand le pourcentage n'est pas
+         * résolvable. C'est ce qui faisait passer les cadres en bandes
+         * horizontales au moment où le flux traité remplaçait la piste brute.
+         *
+         * `object-contain` : l'image entière reste visible et centrée. Le cadre
+         * 16:9 peut donc être bordé par le fond, mais le visage n'est jamais
+         * agrandi ni rogné par un recadrage.
+         */
         className={cn(
-          'size-full object-cover',
+          'absolute inset-0 size-full object-contain',
           mirrored ? '-scale-x-100' : '',
           enabled ? '' : 'invisible',
         )}
@@ -258,7 +269,8 @@ function ScreenShareBox({ videoRef, label, className, placeholder }: ScreenShare
         autoPlay
         playsInline
         aria-label={label}
-        className={cn('size-full object-contain', hasImage ? '' : 'invisible')}
+        /* Hors flux : le partage d'écran ne doit pas non plus dicter la mise en page. */
+        className={cn('absolute inset-0 size-full object-contain', hasImage ? '' : 'invisible')}
       />
       {!hasImage ? (
         <div className="absolute inset-0 grid place-items-center p-4 text-center">{placeholder}</div>

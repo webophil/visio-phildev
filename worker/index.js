@@ -39,6 +39,7 @@ import {
   countDistinctParticipants,
   createMeeting,
   effectiveConfig,
+  getMeeting,
   hasApiToken,
   hasParticipant,
   isUuid,
@@ -85,13 +86,17 @@ const MAX_PARTICIPANTS = 5
 
 const MIN_DISPLAY_NAME = 2
 const MAX_DISPLAY_NAME = 60
+/** Longueur maximale du nom de réunion (identique à `MAX_MEETING_TITLE_LENGTH` côté client). */
 const MAX_TITLE_LENGTH = 80
+/** Nom utilisé quand l'organisateur n'en saisit aucun. */
+const DEFAULT_MEETING_TITLE = 'Réunion PhilDEV'
 const MAX_BODY_BYTES = 4096
 
 /** Limites par adresse cliente : freinent l'abus sans stockage partagé. */
 const hostLoginLimiter = createRateLimiter({ limit: 6, windowMs: 5 * 60_000 })
 const meetingCreationLimiter = createRateLimiter({ limit: 10, windowMs: 5 * 60_000 })
 const tokenLimiter = createRateLimiter({ limit: 15, windowMs: 5 * 60_000 })
+const meetingInfoLimiter = createRateLimiter({ limit: 30, windowMs: 5 * 60_000 })
 
 function json(body, status = 200, headers = {}) {
   return new Response(JSON.stringify(body), {
@@ -225,7 +230,7 @@ async function handleCreateMeeting(request, env) {
   const body = await readJsonBody(request)
   if (!body) return failure(400, 'body-invalid', 'Requête illisible.')
 
-  const title = normalizeTitle(body.title, 'Réunion PhilDEV')
+  const title = normalizeTitle(body.title, DEFAULT_MEETING_TITLE)
   const hostName = normalizeDisplayName(body.displayName) ?? 'Organisateur'
   const { host: hostPreset } = presets(env)
 
@@ -342,6 +347,34 @@ async function handleParticipantToken(request, env) {
 }
 
 /**
+ * `GET /api/meetings/:id` — nom de la réunion, lisible par ses participants.
+ *
+ * Le nom saisi par l'organisateur est stocké dans le **titre de la réunion
+ * RealtimeKit** : aucune base de données n'est nécessaire, et le nom suit la
+ * réunion partout où elle existe. La réponse ne contient que l'identifiant et
+ * le nom — jamais un participant, jamais un jeton, jamais le jeton d'API.
+ */
+async function handleMeetingInfo(request, env, meetingId) {
+  if (!isUuid(meetingId)) {
+    return failure(400, 'meeting-invalid', "L'identifiant de réunion Cloudflare est absent ou invalide.")
+  }
+
+  const limited = enforceRateLimit(request, meetingInfoLimiter, 'meeting-info')
+  if (limited) return limited
+
+  try {
+    const meeting = await getMeeting(env, meetingId)
+    if (!meeting) {
+      return failure(404, 'meeting-not-found', "Cette réunion n'existe plus côté Cloudflare RealtimeKit.")
+    }
+
+    return json({ meetingId, title: normalizeTitle(meeting.title, DEFAULT_MEETING_TITLE) })
+  } catch (error) {
+    return realtimeKitFailure(error)
+  }
+}
+
+/**
  * `GET /api/rtk/diagnostic` — état **en lecture seule** de la configuration.
  * Réservé à l'organisateur : ne renvoie que des statuts et des noms de presets,
  * jamais le jeton, jamais un en-tête, jamais un corps amont.
@@ -408,6 +441,11 @@ async function routeApi(request, url, env) {
   }
   if (path === '/api/meetings' && request.method === 'POST') {
     return handleCreateMeeting(request, env)
+  }
+
+  const meetingInfoMatch = path.match(/^\/api\/meetings\/([^/]+)$/)
+  if (meetingInfoMatch && (request.method === 'GET' || request.method === 'HEAD')) {
+    return handleMeetingInfo(request, env, meetingInfoMatch[1])
   }
   if (path === '/api/rtk/token' && request.method === 'POST') {
     return handleParticipantToken(request, env)

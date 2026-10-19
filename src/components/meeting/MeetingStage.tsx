@@ -3,6 +3,7 @@ import { useRealtimeKitMeeting, useRealtimeKitSelector } from '@cloudflare/realt
 import { MicOff, MonitorOff, MonitorUp, Radio, Volume1 } from 'lucide-react'
 
 import { Button } from '../ui/Button'
+import { COMPACT_TILE_CLASS, WAITING_BANNER_CLASS, stageGridClass, stageTileClass } from './layout'
 import { RemoteScreenShare, RtkParticipantVideo, RtkSelfVideo, SelfScreenShareView } from './RtkVideoSurface'
 import { VideoPlaceholder } from './VideoSurface'
 import { NOTICES } from '../../lib/notices'
@@ -29,7 +30,7 @@ export function MeetingStage() {
 
   if (sharing) {
     return (
-      <div className="relative flex min-h-0 flex-1 flex-col gap-3">
+      <div className="relative flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
         {selfScreenSharing ? (
           <SelfScreenShareView
             self={meeting.self}
@@ -99,39 +100,49 @@ export function MeetingStage() {
     )
   }
 
-  return (
-    <div className="grid min-h-0 flex-1 auto-rows-fr gap-3 sm:grid-cols-2">
-      <SelfTile name={displayName} />
-      {remotes.map((participant) => (
-        <RemoteTile key={participant.id} participant={participant} />
-      ))}
+  /*
+   * Seules les **vignettes réelles** entrent dans la grille. L'attente d'un
+   * second participant est un bandeau compact au-dessus de la scène : avec un
+   * seul participant, la vidéo occupe donc toute la scène, centrée, et aucune
+   * cellule n'est réservée à un emplacement vide.
+   */
+  const tiles = remotes.length + 1
 
+  return (
+    <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
       {remotes.length === 0 ? (
-        <div className="flex flex-col items-center justify-center gap-3 rounded-2xl border border-dashed border-ink-600 bg-ink-900/60 p-6 text-center sm:col-span-1">
-          <MonitorUp aria-hidden="true" className="size-6 text-slate-500" />
+        <div className={WAITING_BANNER_CLASS} role="status">
+          <MonitorUp aria-hidden="true" className="size-4 shrink-0 text-slate-500" />
           <p className="text-sm font-medium text-slate-300">Personne n’a encore rejoint</p>
-          <p className="max-w-xs text-xs leading-relaxed text-slate-400">
+          <p className="min-w-0 flex-1 text-xs leading-relaxed text-slate-400">
             Partagez le lien d’invitation : les participants apparaîtront ici dès qu’ils seront
-            connectés. Aucune vignette n’est affichée à vide.
+            connectés.
           </p>
         </div>
       ) : null}
+
+      <div className={stageGridClass(tiles)}>
+        <SelfTile name={displayName} tiles={tiles} />
+        {remotes.map((participant) => (
+          <RemoteTile key={participant.id} participant={participant} tiles={tiles} />
+        ))}
+      </div>
     </div>
   )
 }
 
-function SelfTile({ name }: { name: string }) {
+function SelfTile({ name, tiles }: { name: string; tiles: number }) {
   const { meeting } = useRealtimeKitMeeting()
   const videoEnabled = useRealtimeKitSelector((client) => client.self.videoEnabled)
   const audioEnabled = useRealtimeKitSelector((client) => client.self.audioEnabled)
 
   return (
-    <div className="relative overflow-hidden rounded-2xl border border-ink-700">
+    <div className={stageTileClass(tiles)}>
       <RtkSelfVideo
         self={meeting.self}
         enabled={videoEnabled}
         label={`Votre flux vidéo (${name})`}
-        className="size-full min-h-40"
+        className="size-full"
         placeholder={
           <VideoPlaceholder
             title={name}
@@ -148,20 +159,26 @@ function SelfTile({ name }: { name: string }) {
   )
 }
 
-function RemoteTile({ participant, compact = false }: { participant: RTKParticipant; compact?: boolean }) {
+function RemoteTile({
+  participant,
+  tiles,
+  compact = false,
+}: {
+  participant: RTKParticipant
+  tiles?: number
+  compact?: boolean
+}) {
   return (
     <div
       className={
-        compact
-          ? 'relative w-40 shrink-0 overflow-hidden rounded-xl border border-ink-700'
-          : 'relative overflow-hidden rounded-2xl border border-ink-700'
+        compact ? COMPACT_TILE_CLASS : stageTileClass(tiles ?? 1)
       }
     >
       <RtkParticipantVideo
         participant={participant}
         enabled={participant.videoEnabled}
         label={`Flux vidéo de ${participant.name}`}
-        className={compact ? 'aspect-video' : 'size-full min-h-40'}
+        className="size-full"
         placeholder={
           <VideoPlaceholder
             title={participant.name}

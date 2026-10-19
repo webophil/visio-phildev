@@ -1,4 +1,4 @@
-# PhilDEV Visio — Phase 2
+# PhilDEV Visio — Phase 2.1
 
 Application de visioconférence de PhilDEV, pensée pour les rendez-vous clients et la
 collaboration avec un stagiaire. Interface entièrement en français, sans installation ni
@@ -13,6 +13,9 @@ projet de déploiement : elle change si le site est recréé.
 > **Phase 2 : visioconférence réelle.** Les flux audio et vidéo transitent par **Cloudflare
 > RealtimeKit** (SFU). Deux navigateurs distants se voient et se parlent réellement. Les invités
 > rejoignent avec un lien, sans compte. Aucun participant n'est simulé.
+>
+> **Phase 2.1 :** nom de réunion personnalisable, flou d'arrière-plan calculé localement, et chat
+> branché sur la messagerie native de RealtimeKit.
 
 ## Stack
 
@@ -24,6 +27,7 @@ projet de déploiement : elle change si le site est recréé.
 | Icônes | `lucide-react` |
 | Temps réel | `@cloudflare/realtimekit` 2.0.3 + `@cloudflare/realtimekit-react` 2.0.3 |
 | Médias | SDK RealtimeKit (`Client.initMedia`) — une seule capture des périphériques |
+| Effets vidéo | `addVideoMiddleware` du SDK + MediaPipe Selfie Segmentation (WebAssembly servi par l'application) |
 | Routage | Routeur minimal interne (`src/lib/router.ts`, History API) |
 | Lint | Oxlint (`npm run lint`) |
 | Déploiement | FreeBuff Sites : Worker Cloudflare + assets statiques (voir « Déploiement ») |
@@ -45,6 +49,9 @@ Navigateur ──► Worker FreeBuff (/api/...)  ──► API Cloudflare Realti
 | `src/meeting/transport/RealtimeKitTransport.ts` | Seule frontière avec le SDK côté navigateur |
 | `src/media/useRtkMedia.ts` | Capture des périphériques par le SDK (écran de préparation) |
 | `src/media/remoteAudio.ts` | Sélection des pistes audio distantes à restituer (pure, testée) |
+| `src/media/backgroundBlur.ts` | Flou d'arrière-plan : détourage local puis composition du flux publié |
+| `scripts/vendor-mediapipe.mjs` | Recopie le moteur de segmentation dans `public/vendor` (fichiers non versionnés) |
+| `src/lib/meetingTitle.ts` | Nom de réunion : valeur par défaut, longueur maximale, normalisation |
 | `src/components/meeting/RemoteAudio.tsx` | Sortie audio des participants distants (un `<audio>` par participant) |
 | `src/meeting/rtkApi.ts` | Appels typés à l'API du Worker |
 | `src/meeting/hostSession.ts` | Session organisateur et identifiant d'invité, côté navigateur |
@@ -74,6 +81,133 @@ dépend pas de l'affichage ;
 Si le navigateur refuse la lecture automatique (`NotAllowedError`), un message explicite propose
 « Activer le son » et la reprise est tentée dès le premier clic ou la première touche.
 
+## Nom de la réunion
+
+Le champ « Nom de la réunion » est proposé à la création, pré-rempli avec « Réunion PhilDEV » et
+borné à 80 caractères (même limite côté navigateur et côté Worker). Le nom est transmis à
+`POST /api/meetings` et enregistré comme **titre de la réunion RealtimeKit** : il n'y a ni base de
+données, ni paramètre ajouté au lien d'invitation.
+
+Chaque participant relit ce titre par `GET /api/meetings/:id`, qui ne renvoie que l'identifiant et
+le nom (jamais un participant, jamais un jeton). Tant que ce titre n'est pas reçu — ou s'il est
+absent — l'application retombe sur le nom dérivé de l'identifiant lisible (`/rdv-aurore` →
+« Aurore »). Conséquence assumée : renommer une réunion existante demanderait un appel
+supplémentaire à l'API RealtimeKit ; ce n'est pas proposé dans cette version.
+
+## Chat
+
+Le panneau Chat est branché sur la **messagerie native** du SDK (`client.chat`) :
+
+- lecture de l'historique public à l'entrée en salle (`fetchPublicMessages`) puis réception en
+direct (`chatUpdate`) ;
+- envoi par `sendTextMessage`, avec la limite de longueur annoncée par le SDK ;
+- auteur, heure et contenu affichés, défilement automatique, saisie pleine largeur sur mobile ;
+- disponibilité lue dans le preset du participant (`permissions.chatPublic`) : si le profil
+  n'autorise pas l'écrit, le panneau le dit et la saisie reste désactivée ;
+- aucune persistance : l'application ne stocke aucun message et n'en relit aucun après la réunion.
+
+## Mise en page de la salle
+
+La scène vidéo et le panneau latéral sont **indépendants en taille** :
+
+- l'écran de réunion est borné au viewport (`h-dvh` + `overflow-hidden`) : la scène reçoit la
+  hauteur restante, elle ne grandit jamais avec le contenu d'un panneau ;
+- le panneau a une largeur **fixe** sur ordinateur (`22rem`, `min-w` = `max-w`) et `shrink-0` ;
+  c'est sa zone de contenu qui défile (`min-h-0` + `overflow-y-auto`) ;
+- les bulles de chat passent à la ligne même sur un « mot » de 600 caractères
+  (`overflow-wrap: anywhere`) ;
+- les vignettes n'ont **aucune hauteur minimale** : `min-h-0`/`min-w-0` + `auto-rows-fr`, et la
+  vidéo est en `object-cover`, donc jamais déformée ;
+- les `<video>` et le cadre d'attente sont **hors du flux** (`absolute inset-0`) : un élément
+  remplacé ne peut pas dicter la hauteur d'une ligne de grille. Activer ou retirer un effet vidéo —
+  donc remplacer la piste — ne change jamais la taille ni la disposition des cadres ;
+- 1 vignette → 1 colonne, 2 à 4 → 2 colonnes, 5 et plus → 3 colonnes sur grand écran.
+
+Ces règles vivent dans `src/components/meeting/layout.ts` et sont vérifiées par
+`npm run test:smoke` (groupe « mise en page »), y compris le rendu réel du panneau de chat avec un
+message très long.
+
+## Flou d'arrière-plan
+
+Le SDK installé (2.0.3) **ne fournit aucun effet de flou natif** : il expose en revanche
+`addVideoMiddleware`, qui confie chaque image de la caméra à un canevas avant publication. C'est ce
+point d'accroche qui est utilisé (`src/media/backgroundBlur.ts`) :
+
+1. le détourage de la silhouette est calculé **sur l'appareil** par MediaPipe Selfie Segmentation
+   (WebAssembly), servi depuis `public/vendor/mediapipe` — aucun CDN, aucun service externe ;
+2. chaque image publiée est composée du fond réduit puis agrandi (flou économique) et de la
+   silhouette nette découpée par le masque, contours adoucis ;
+3. la piste audio et le partage d'écran ne sont jamais touchés, et **aucune seconde capture** de la
+   caméra n'est ouverte : le SDK reste propriétaire de la piste.
+
+### Géométrie du flux — cause d'un défaut corrigé
+
+Le rendu par image du SDK dimensionne son canvas avec la **largeur de l'élément `<video>`** qu'il crée
+(`canvas.height = video.width || settings.height`), pas avec la taille de la piste. Le flux publié
+devenait carré, puis rogné par l'affichage (`object-cover`) : on ne voyait plus qu'une bande
+horizontale du visage.
+
+Le traitement prend donc le canvas en main (`setVideoMiddlewareGlobalConfig({
+  disablePerFrameCanvasRendering: true })`) et compose lui-même chaque image, à la taille réelle de la
+piste (plafonnée à 1280 px de large, rapport conservé). Le masque de détourage suit le rapport
+d'image de cette image — auparavant figé en 16:9, il était étiré sur une vidéo carrée et ne
+correspondait plus à la silhouette.
+
+Le panneau affiche la taille réellement publiée (`flux 1280×720`) : c'est la valeur à vérifier en
+premier si l'image paraît déformée.
+
+### Lecture du masque — cause d'un défaut corrigé
+
+MediaPipe n'encode **pas** son masque en niveaux de gris opaques : le convertisseur GPU écrit
+`vec4(m, 0, 0, m)`, c'est-à-dire la valeur du masque **dans le rouge et dans l'alpha**, vert et bleu
+à zéro. Lire la luminance des trois canaux donnait `0,299 × m` : la silhouette n'était donc
+restaurée qu'à ~30 % d'opacité, et le fond flou transparaissait à travers le visage — l'image
+entière semblait floue.
+
+`applyPersonMask` lit désormais le rouge et l'alpha (équivalents), applique une rampe douce
+(15 % → 60 %) qui rend le premier plan **totalement net** tout en gardant un contour fondu, et
+renvoie la couverture de la silhouette. Si aucune silhouette n'est détectée (< 0,5 % de l'image),
+l'image reste nette : un masque inexploitable ne peut plus produire une vidéo entièrement floue.
+
+### Chargement du moteur — cause d'un défaut corrigé
+
+Le paquet `@mediapipe/selfie_segmentation` est un **script classique** qui publie son constructeur
+sur `window.SelfieSegmentation`. Compilé dans le bundle, il ne produit **aucun export ES** :
+l'ancien `import { SelfieSegmentation }` valait `undefined`, la fabrique du middleware levait, et le
+SDK — qui intercepte ces erreurs — republiait la piste brute en répondant `success: true`.
+L'interface affichait donc « Flou · Actif » sans le moindre effet, chez soi comme chez les autres.
+
+Le moteur est désormais chargé par une balise `<script>` servie par l'application
+(`/vendor/mediapipe/selfie_segmentation/selfie_segmentation.js`, même origine), exactement comme le
+documente MediaPipe : plus aucune dépendance à l'interopérabilité du bundler.
+
+Comme le SDK applique un middleware « en silence », trois contrôles rendent désormais tout échec
+visible, avant d'annoncer que l'effet est actif :
+
+1. le moteur doit produire un **masque de test** sur une image locale (aucune image de caméra) ;
+2. la piste publiée (`videoTrack`) doit être **différente** de la piste brute (`rawVideoTrack`) ;
+3. au moins une image doit **atteindre le traitement** dans les 4 secondes.
+
+Chacun de ces contrôles échoue avec un message en français, retire le middleware et laisse la
+caméra normale. Le panneau « Effets de fond » affiche en complément des compteurs (images reçues,
+images recomposées, détourages calculés par seconde) et la **couverture de la silhouette** : des
+**nombres uniquement**, jamais une image.
+
+Choix de conception :
+
+- **opt-in** — « Aucun effet » est l'état par défaut ;
+- détourage à ~14 images/s, masque réutilisé entre deux calculs, silhouette plafonnée à 960 px de
+  large : le coût reste borné sur une machine modeste ;
+- si le navigateur n'accepte pas les middlewares (WebKit ancien) ou si le moteur ne se charge pas,
+  l'ajout échoue **explicitement** : l'interface revient à « Aucun effet », affiche un message, et
+  la caméra continue d'être diffusée normalement ;
+- le moteur (~6 Mo de WebAssembly + modèle) n'est téléchargé qu'au premier passage en « Flou »,
+  puis mis en cache par le navigateur.
+
+Les fichiers du moteur ne sont pas versionnés (`public/vendor/` est ignoré) :
+`scripts/vendor-mediapipe.mjs` les recopie depuis `node_modules` à chaque `npm run dev` et
+`npm run build` (crochets `predev` / `prebuild`), sans réseau.
+
 ## Secrets et identifiants
 
 | Nom | Type | Rôle |
@@ -101,6 +235,7 @@ L'identifiant de compte (`adad9ec2e55b7a9279e74eea378c3a54`) et l'application Re
 | `GET` | `/api/health` | public | Disponibilité du service |
 | `POST` | `/api/host/session` | clé organisateur | Échange la clé contre une session signée (30 jours) |
 | `POST` | `/api/meetings` | **session hôte** | Crée une réunion et réserve l'emplacement de l'organisateur |
+| `GET` | `/api/meetings/:id` | public | Nom de la réunion (identifiant et titre uniquement) |
 | `POST` | `/api/rtk/token` | public (invité) / session (hôte) | Délivre un jeton de participation |
 | `GET` | `/api/rtk/diagnostic` | **session hôte** | État en lecture seule (presets, configuration) — aucun secret |
 
@@ -155,6 +290,30 @@ npm run test:worker # Worker : routage, repli SPA, API, autorisations, capacité
 `test:worker` exécute le handler `fetch` du Worker avec un binding `ASSETS` simulé et une API
 Cloudflare RealtimeKit interceptée : aucun appel réseau réel, aucune réunion créée.
 
+### Vérifications manuelles (deux machines)
+
+Le flou et le chat engagent du matériel et deux navigateurs : ces deux points se contrôlent à la
+main, depuis l'adresse de prévisualisation.
+
+| Étape | Attendu |
+| --- | --- |
+| 1. Accès organisateur puis création avec le nom « Rendez-vous Aurore Studer » | La salle affiche ce nom en en-tête, à la place du nom déduit de l'identifiant |
+| 2. Ouverture du **même lien** sur un second PC, avec un autre nom de participant | Le nom de la réunion est identique pour les deux ; « Participants » liste les deux |
+| 3. Audio : parler dans un sens puis dans l'autre | Voix audible des deux côtés, sans écho (un seul `<audio>` par participant distant) |
+| 4. Vidéo : activer puis couper la caméra de chaque côté | Les vignettes suivent l'état réel, la voix continue de passer |
+| 5. Partage d'écran depuis un PC | L'écran occupe la scène, les caméras passent en vignettes, le son du partage est audible |
+| 6. Chat : un message depuis chaque PC | Message affiché avec auteur et heure des deux côtés ; si le preset interdit l'écrit, le panneau l'explique au lieu d'échouer |
+| 7. Effets : « Flou » sur un PC | Le panneau affiche des compteurs non nuls (≈ 20 images/s reçues, ≈ 14 détourages/s) et une silhouette détectée entre 10 % et 70 % ; **visage et silhouette parfaitement nets**, arrière-plan flou **chez vous et chez l'autre participant** ; le retour à « Aucun effet » rétablit l'image d'origine |
+| 8. Effets sur un navigateur WebKit ancien ou sans WebAssembly SIMD | Message d'échec explicite, caméra normale conservée, aucun écran noir |
+| 9. En pleine réunion, basculer « Aucun effet » → « Flou » → « Aucun effet » | Le changement s'applique en une à deux secondes, sans couper la voix ; les compteurs repartent à chaque activation, l'image d'origine revient au retrait |
+| 10. Ouvrir « Participants », « Chat » puis « Effets » ; envoyer un message de 500 caractères sans espace | La taille des vidéos ne change pas, le panneau défile seul, le message passe à la ligne ; à 2, 3, 4 puis 5 participants la grille reste équilibrée et les images ne sont pas déformées |
+| 10 bis. Activer puis retirer « Flou », seul, puis à deux participants | Aucun saut : les cadres gardent exactement la même taille et la même place pendant le remplacement de la piste |
+| 11. Partager l'écran pendant qu'un panneau est ouvert | L'écran garde son ratio (`object-contain`), l'incrustation webcam reste en 16:9 dans le coin |
+
+Si le chat reste indisponible alors que le panneau est ouvert, vérifier dans le tableau de bord
+Cloudflare RealtimeKit que le preset utilisé (`group_call_host`, `group_call_participant`) autorise
+les messages écrits.
+
 ## Déploiement — FreeBuff Sites
 
 L'artefact publié est **`dist/`**, produit par `npm run build`, servi par le Worker Cloudflare.
@@ -166,6 +325,9 @@ Deux fichiers versionnés suffisent à reproduire un déploiement :
 | `worker/*.js` | Worker : API RealtimeKit puis service des assets |
 
 `dist/` n'est pas versionné : il est reconstruit par `npm run build` avant tout déploiement.
+Depuis la Phase 2.1, `dist/` contient aussi le moteur de segmentation (~6 Mo, servi sous
+`/vendor/mediapipe/…`) : l'artefact complet pèse environ 7 Mo, sous la limite de 10 Mio imposée à
+un déploiement.
 
 ### Déploiement explicite uniquement
 

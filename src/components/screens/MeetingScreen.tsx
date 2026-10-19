@@ -58,8 +58,13 @@ function MeetingLayout() {
           : 'Déconnecté'
 
   return (
-    <div className="flex min-h-dvh flex-col bg-ink-950">
-      <header className="flex flex-wrap items-center justify-between gap-3 border-b border-ink-800 bg-ink-900/80 px-4 py-3 backdrop-blur-sm sm:px-6">
+    /*
+     * Hauteur **fixée au viewport** et débordement masqué : la scène se partage
+     * l'espace restant, quel que soit le contenu du panneau latéral. Sans cela,
+     * un long message de chat allongeait la page et agrandissait les vignettes.
+     */
+    <div className="flex h-dvh flex-col overflow-hidden bg-ink-950">
+      <header className="flex shrink-0 flex-wrap items-center justify-between gap-3 border-b border-ink-800 bg-ink-900/80 px-4 py-3 backdrop-blur-sm sm:px-6">
         <div className="flex min-w-0 items-center gap-3.5">
           <PhilDevLogo size="sm" />
           <span aria-hidden="true" className="hidden h-6 w-px bg-ink-700 sm:block" />
@@ -106,7 +111,7 @@ function MeetingLayout() {
       </header>
 
       {session.error ? (
-        <div className="px-4 pt-3 sm:px-6">
+        <div className="shrink-0 px-4 pt-3 sm:px-6">
           <Notice
             tone="danger"
             title="Réunion"
@@ -121,8 +126,8 @@ function MeetingLayout() {
         </div>
       ) : null}
 
-      <main className="flex min-h-0 flex-1 flex-col gap-3 p-3 sm:p-4 lg:flex-row">
-        <div className="flex min-h-0 flex-1 flex-col gap-3">
+      <main className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden p-3 sm:p-4 lg:flex-row">
+        <div className="flex min-h-0 min-w-0 flex-1 flex-col gap-3 overflow-hidden">
           {/* Sortie audio des voix distantes : montée ici, donc indépendante de
               la disposition affichée par la scène. */}
           <RemoteAudioSinks />
@@ -135,7 +140,7 @@ function MeetingLayout() {
         {activePanel === 'effects' ? <BackgroundEffectsPanel /> : null}
       </main>
 
-      <footer className="flex flex-col gap-2 px-4 pb-4 sm:px-6">
+      <footer className="flex shrink-0 flex-col gap-2 px-4 pb-4 sm:px-6">
         <p className="flex items-start gap-2 text-xs leading-relaxed text-slate-400">
           <Info aria-hidden="true" className="mt-0.5 size-3.5 shrink-0 text-slate-500" />
           {NOTICES.capacity}
