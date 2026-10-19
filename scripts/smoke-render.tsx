@@ -6,6 +6,7 @@ import { renderToStaticMarkup } from 'react-dom/server'
 import type { RTKSelf } from '@cloudflare/realtimekit'
 
 import { ChatPanel } from '../src/components/meeting/ChatPanel'
+import { MeetingStage } from '../src/components/meeting/MeetingStage'
 import {
   RemoteScreenShare,
   RtkParticipantVideo,
@@ -15,9 +16,10 @@ import { RemoteAudioSinks } from '../src/components/meeting/RemoteAudio'
 import {
   COMPACT_TILE_CLASS,
   SIDE_PANEL_CLASS,
-  VIDEO_TILE_CLASS,
+  WAITING_BANNER_CLASS,
   stageColumns,
   stageGridClass,
+  stageTileClass,
 } from '../src/components/meeting/layout'
 import { MeetingContext } from '../src/state/meetingContext'
 import type { MeetingContextValue } from '../src/state/meetingContext'
@@ -392,17 +394,19 @@ checks.push({
     expect(stageColumns(2) === 2 && stageColumns(4) === 2, '2 à 4 vignettes → 2 colonnes')
     expect(stageColumns(5) === 3, '5 vignettes → 3 colonnes sur grand écran')
 
-    const grid = stageGridClass(2)
+    const grid = stageGridClass(4)
     expect(grid.includes('auto-rows-fr'), 'lignes de hauteur égale')
     expect(grid.includes('min-h-0') && grid.includes('min-w-0'), 'la scène ne dicte pas sa taille')
     expect(grid.includes('overflow-hidden'), 'aucun débordement de la scène')
     expect(!grid.includes('min-h-40'), 'aucune hauteur minimale fixe sur la scène')
     expect(stageGridClass(5).includes('lg:grid-cols-3'), '5 participants → 3 colonnes')
 
-    // Vignettes : dimensions issues de la grille uniquement.
-    expect(VIDEO_TILE_CLASS.includes('min-h-0'), 'vignette sans hauteur imposée')
-    expect(VIDEO_TILE_CLASS.includes('min-w-0'), 'vignette sans largeur imposée')
-    expect(!VIDEO_TILE_CLASS.includes('min-h-40'), 'plus de hauteur minimale sur la vignette')
+    // Vignettes en grille : dimensions issues de la grille uniquement.
+    const gridTile = stageTileClass(3)
+    expect(gridTile.includes('min-h-0'), 'vignette sans hauteur imposée')
+    expect(gridTile.includes('min-w-0'), 'vignette sans largeur imposée')
+    expect(gridTile.includes('h-full') && gridTile.includes('w-full'), 'la vignette remplit sa cellule')
+    expect(!gridTile.includes('min-h-40'), 'plus de hauteur minimale sur la vignette')
     expect(COMPACT_TILE_CLASS.includes('aspect-video'), 'vignette compacte en 16:9')
 
     // Panneau : largeur fixe, non compressible et non extensible.
@@ -454,14 +458,94 @@ checks.push({
     )
     expect(html.includes(longWord), 'message long rendu intégralement')
 
-    // --- Un seul participant, puis deux -----------------------------------
+    // --- Disposition de la scène ------------------------------------------
+    // Seul : une seule vignette, centrée, dans un cadre 16:9 borné.
     const one = stageGridClass(1)
-    expect(one.includes('grid-cols-1'), 'seul → une colonne pleine largeur')
+    expect(one.includes('grid-cols-1'), 'seul → une seule colonne')
+    expect(one.includes('place-items-center'), 'seul → vignette centrée')
     expect(one.includes('h-full'), 'scène de hauteur explicite (1 participant)')
+    expect(!one.includes('auto-rows-fr'), 'seul → aucune répartition en plusieurs lignes')
 
+    const oneTile = stageTileClass(1)
+    expect(oneTile.includes('stage-frame'), 'seul → cadre 16:9 dimensionné par la scène')
+    expect(!oneTile.includes('h-full'), 'seul → la vignette ne s’étire pas sur toute la hauteur')
+    expect(!oneTile.includes('col-span') && !oneTile.includes('row-span'), 'seul → aucune cellule réservée')
+
+    // À deux : deux colonnes dès que la largeur le permet.
     const two = stageGridClass(2)
     expect(two.includes('h-full'), 'scène de hauteur explicite (2 participants)')
-    expect(two.includes('auto-rows-fr'), 'une seule ligne répartie (2 participants)')
+    expect(two.includes('sm:grid-cols-2'), '2 participants → côte à côte sur écran large')
+    expect(two.includes('auto-rows-fr'), '2 participants → une seule ligne, hauteur répartie')
+
+    const twoTile = stageTileClass(2)
+    expect(twoTile.includes('h-full') && twoTile.includes('w-full'), '2 participants → chaque vignette occupe sa colonne')
+    expect(!twoTile.includes('aspect-video'), '2 participants → pas de cadre 16:9 forcé qui rétrécit l’image')
+    expect(!twoTile.includes('object-cover'), '2 participants → aucun recadrage imposé par le cadre')
+
+    // Trois à cinq : grille équilibrée et responsive.
+    expect(stageGridClass(3).includes('sm:grid-cols-2'), '3 participants → 2 colonnes')
+    expect(stageGridClass(5).includes('lg:grid-cols-3'), '5 participants → 3 colonnes')
+    expect(stageTileClass(4).includes('h-full'), 'grille → la vignette remplit la hauteur de sa cellule')
+
+    // L'emplacement vide est un bandeau, jamais une cellule de grille.
+    expect(WAITING_BANNER_CLASS.includes('shrink-0'), 'bandeau d’attente compact')
+    expect(
+      !WAITING_BANNER_CLASS.includes('col-span') &&
+        !WAITING_BANNER_CLASS.includes('row-span') &&
+        !WAITING_BANNER_CLASS.includes('grid'),
+      'l’attente ne réserve aucune cellule de la scène',
+    )
+
+    // --- La scène réelle : une seule vignette, aucune cellule réservée ------
+    const stageClient = {
+      self: {
+        videoEnabled: true,
+        audioEnabled: true,
+        screenShareEnabled: false,
+        registerVideoElement: () => {},
+        deregisterVideoElement: () => {},
+      },
+      participants: { joined: { toArray: () => [] } },
+    }
+
+    const stageContext = {
+      participantName: 'Aurore',
+      setScreenShareEnabled: async () => {},
+    } as unknown as MeetingContextValue
+
+    const stageHtml = renderToStaticMarkup(
+      <RealtimeKitContext.Provider
+        value={{ meeting: stageClient, updates: undefined } as unknown as React.ContextType<
+          typeof RealtimeKitContext
+        >}
+      >
+        <MeetingContext.Provider value={stageContext}>
+          <MeetingStage />
+        </MeetingContext.Provider>
+      </RealtimeKitContext.Provider>,
+    )
+
+    const gridIndex = stageHtml.indexOf('stage-area')
+    const bannerIndex = stageHtml.indexOf('Personne n’a encore rejoint')
+    expect(gridIndex > 0, 'scène rendue avec son cadre mesuré')
+    expect(bannerIndex > 0 && bannerIndex < gridIndex, 'l’attente est rendue hors de la grille')
+    expect(
+      !stageHtml.slice(gridIndex).includes('border-dashed'),
+      'aucune cellule d’attente dans la grille',
+    )
+    expect(
+      stageHtml.split('Votre flux vidéo').length - 1 === 1,
+      'seul → exactement une vignette, celle du participant local',
+    )
+
+    // Les utilitaires CSS qui portent le cadre et la mesure de la scène.
+    const css = readFileSync(new URL('../src/index.css', import.meta.url), 'utf8')
+    expect(/@utility stage-area \{[^}]*container-type: size/.test(css), 'scène mesurable (container-type)')
+    expect(
+      /@utility stage-frame \{[^}]*aspect-ratio: 16 \/ 9/.test(css),
+      'cadre 16:9 défini en CSS',
+    )
+    expect(/@utility stage-frame \{[^}]*min\(100cqw, 177\.78cqh\)/.test(css), 'cadre borné par la scène')
 
     // --- Les médias ne dictent jamais la taille des cadres -----------------
     const selfStub = {
@@ -479,7 +563,7 @@ checks.push({
       />,
     )
     expect(selfHtml.includes('absolute inset-0'), 'aperçu local hors du flux')
-    expect(selfHtml.includes('object-cover'), 'aperçu local rempli sans déformation')
+    expect(selfHtml.includes('object-contain'), 'aperçu local entier, sans recadrage')
 
     const participantStub = {
       id: 'p2',
@@ -504,7 +588,7 @@ checks.push({
       />,
     )
     expect(remoteHtml.includes('absolute inset-0'), 'vidéo distante hors du flux')
-    expect(remoteHtml.includes('object-cover'), 'vidéo distante remplie sans déformation')
+    expect(remoteHtml.includes('object-contain'), 'vidéo distante entière, sans recadrage')
 
     const shareHtml = renderToStaticMarkup(
       <RemoteScreenShare

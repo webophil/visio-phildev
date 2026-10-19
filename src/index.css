@@ -80,6 +80,26 @@
   border: 1px solid var(--color-ink-700);
 }
 
+/*
+ * Scène vidéo : conteneur de requête.
+ * Les cadres se dimensionnent d'après la place réellement disponible (et non
+ * d'après le média ou la fenêtre), ce qui évite tout débordement.
+ */
+@utility stage-area {
+  container-type: size;
+}
+
+/*
+ * Cadre 16:9 qui tient entièrement dans la scène, avec une largeur maximale
+ * raisonnable : `min(cqw, 16/9 × cqh)` garantit qu'aucune des deux dimensions
+ * ne déborde, donc aucun recadrage ni étirement de la boîte.
+ */
+@utility stage-frame {
+  width: min(100cqw, 177.78cqh);
+  max-width: 64rem;
+  aspect-ratio: 16 / 9;
+}
+
 /* Fond de scène : léger halo, sans dégradé décoratif excessif */
 @utility stage-backdrop {
   background-color: var(--color-ink-950);

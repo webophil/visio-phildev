@@ -140,9 +140,13 @@ function VideoShell({
          * peut dicter la hauteur des conteneurs quand le pourcentage n'est pas
          * résolvable. C'est ce qui faisait passer les cadres en bandes
          * horizontales au moment où le flux traité remplaçait la piste brute.
+         *
+         * `object-contain` : l'image entière reste visible et centrée. Le cadre
+         * 16:9 peut donc être bordé par le fond, mais le visage n'est jamais
+         * agrandi ni rogné par un recadrage.
          */
         className={cn(
-          'absolute inset-0 size-full object-cover',
+          'absolute inset-0 size-full object-contain',
           mirrored ? '-scale-x-100' : '',
           enabled ? '' : 'invisible',
         )}
